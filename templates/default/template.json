@@ -1,0 +1,4 @@
+{
+  "main": "main.tex.j2",
+  "overleaf_engine": "pdflatex"
+}

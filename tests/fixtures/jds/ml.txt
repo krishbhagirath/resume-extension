@@ -1,0 +1,19 @@
+Machine Learning Engineer Intern - Applied AI
+
+In this role you will train and evaluate deep learning models and ship them to production behind Python APIs.
+
+Responsibilities:
+Train, fine-tune and evaluate transformer models in PyTorch for text and vision tasks
+Build data pipelines with Pandas and NumPy, run experiments and ablations, and track results
+Serve models with FastAPI and ONNX, measuring latency and accuracy
+Prototype LLM features using retrieval-augmented generation (RAG) and agents with LangChain
+
+Qualifications:
+Must have strong Python and PyTorch experience
+Solid understanding of machine learning fundamentals, statistics and model evaluation
+Experience with deep learning (CNNs, Transformers) on real datasets
+
+Preferred:
+Experience with reinforcement learning or forecasting is a plus
+Familiarity with Docker and GCP
+Publications or open-source ML projects

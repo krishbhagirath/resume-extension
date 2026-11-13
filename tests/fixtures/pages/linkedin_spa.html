@@ -1,0 +1,14 @@
+<!doctype html><html><head><title>Jobs | LinkedIn</title></head><body>
+<header><nav>Home My Network Jobs Messaging Notifications</nav></header>
+<ul><li><a href="#" id="job1">Backend Intern</a></li><li><a href="#" id="job2">Hardware Verification Intern</a></li></ul>
+<div class="job-details-jobs-unified-top-card__company-name">Northwind</div>
+<h1 class="job-details-jobs-unified-top-card__job-title" id="title">Backend Intern</h1>
+<div id="job-details"></div>
+<script>
+const JOBS={1:{t:"Backend Intern",c:"Northwind",d:"<h3>Responsibilities</h3><ul><li>Build REST APIs in Java and Go</li><li>Write SQL against PostgreSQL</li><li>Write unit tests and ship with CI/CD</li></ul><h3>Qualifications</h3><ul><li>Experience with Java, Go or Python</li><li>Knowledge of data structures and databases</li></ul>"},
+2:{t:"Hardware Verification Intern",c:"Contoso Silicon",d:"<h3>Responsibilities</h3><ul><li>Write SystemVerilog testbenches and UVM sequences</li><li>Run RTL simulation and debug waveforms</li><li>Automate regressions in Python</li></ul><h3>Qualifications</h3><ul><li>Experience with Verilog or SystemVerilog</li><li>Understanding of computer architecture and digital logic</li></ul>"}};
+function show(id){const j=JOBS[id];document.getElementById('title').textContent=j.t;document.querySelector('.job-details-jobs-unified-top-card__company-name').textContent=j.c;document.getElementById('job-details').innerHTML=j.d;}
+show(1);
+document.getElementById('job2').onclick=e=>{e.preventDefault();history.pushState({},'', '/jobs/search/?currentJobId=2');setTimeout(()=>show(2),300);};
+document.getElementById('job1').onclick=e=>{e.preventDefault();history.pushState({},'', '/jobs/search/?currentJobId=1');setTimeout(()=>show(1),300);};
+</script></body></html>

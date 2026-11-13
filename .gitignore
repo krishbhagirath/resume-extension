@@ -1,0 +1,19 @@
+.env
+.venv/
+__pycache__/
+output/
+data/*.backup.yaml
+/bin/
+# Resume Tailor's own Claude login. Never commit this.
+.claude-account/
+
+# local secrets (never commit)
+data/.token
+data/.paired-extension
+node_modules/
+.pytest_cache/
+.work/
+# your real bank stays on your computer (setup copies example-bank.yaml the first time)
+data/experiences.yaml
+data/experiences.*.yaml
+*.zip

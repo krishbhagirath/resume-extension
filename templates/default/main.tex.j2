@@ -1,0 +1,108 @@
+%% Resume template. Jinja2 syntax with LaTeX-safe delimiters:
+%%   VAR{x}           -> prints a variable (already LaTeX-escaped), written with a leading backslash
+%%   BLOCK{for x in y} -> control flow, also with a leading backslash
+%% To use your own Overleaf design: copy its preamble + layout here and
+%% swap the hardcoded experience/project/skill content for the loops below.
+\documentclass[letterpaper,11pt]{article}
+
+\usepackage[empty]{fullpage}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{titlesec}
+\usepackage[usenames,dvipsnames]{color}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+\usepackage{tabularx}
+
+\pagestyle{empty}
+\addtolength{\oddsidemargin}{-0.55in}
+\addtolength{\evensidemargin}{-0.55in}
+\addtolength{\textwidth}{1.1in}
+\addtolength{\topmargin}{-0.6in}
+\addtolength{\textheight}{1.2in}
+\urlstyle{same}
+\raggedbottom
+\raggedright
+\setlength{\tabcolsep}{0in}
+
+\titleformat{\section}{\vspace{-5pt}\scshape\raggedright\large\bfseries}{}{0em}{}[\color{black}\titlerule\vspace{-4pt}]
+
+\newcommand{\itemhead}[4]{%
+  \item
+  \begin{tabular*}{\textwidth}[t]{l@{\extracolsep{\fill}}r}
+    \textbf{#1} & #2 \\
+    \textit{\small #3} & \textit{\small #4} \\
+  \end{tabular*}\vspace{-6pt}
+}
+\newcommand{\projhead}[2]{%
+  \item
+  \begin{tabular*}{\textwidth}[t]{l@{\extracolsep{\fill}}r}
+    \small#1 & \small #2 \\
+  \end{tabular*}\vspace{-6pt}
+}
+\newenvironment{headlist}{\begin{itemize}[leftmargin=0.1in, label={}]}{\end{itemize}}
+\newenvironment{bulletlist}{\begin{itemize}[leftmargin=0.2in, itemsep=-1pt, topsep=2pt, label=$\vcenter{\hbox{\tiny$\bullet$}}$]\small}{\end{itemize}\vspace{-4pt}}
+
+\begin{document}
+
+%% ---------- Header ----------
+\begin{center}
+  {\Huge \scshape \VAR{p.first_name} \VAR{p.last_name}} \\ \vspace{2pt}
+  \small \VAR{p.phone} $|$ \href{mailto:\VAR{p.email_raw}}{\VAR{p.email}} $|$ \VAR{p.location}
+  \BLOCK{for l in p.links} $|$ \href{\VAR{l.url_raw}}{\underline{\VAR{l.label}}}\BLOCK{endfor}
+\end{center}
+
+%% ---------- Education ----------
+\section{Education}
+\begin{headlist}
+\BLOCK{for e in education}
+  \itemhead{\VAR{e.school}}{\VAR{e.location}}{\VAR{e.degree}}{\VAR{e.dates}}
+  \BLOCK{if e.details}
+  \begin{bulletlist}\item \VAR{e.details}\end{bulletlist}
+  \BLOCK{endif}
+\BLOCK{endfor}
+\end{headlist}
+
+\BLOCK{if experiences}
+%% ---------- Experience ----------
+\section{Experience}
+\begin{headlist}
+\BLOCK{for x in experiences}
+  \itemhead{\VAR{x.title}}{\VAR{x.dates}}{\VAR{x.org}}{\VAR{x.location}}
+  \begin{bulletlist}
+  \BLOCK{for b in x.bullets}
+    \item \VAR{b}
+  \BLOCK{endfor}
+  \end{bulletlist}
+\BLOCK{endfor}
+\end{headlist}
+\BLOCK{endif}
+
+\BLOCK{if projects}
+%% ---------- Projects ----------
+\section{Projects}
+\begin{headlist}
+\BLOCK{for x in projects}
+  \projhead{\textbf{\VAR{x.title}} $|$ \emph{\VAR{x.stack}}}{\VAR{x.dates}}
+  \begin{bulletlist}
+  \BLOCK{for b in x.bullets}
+    \item \VAR{b}
+  \BLOCK{endfor}
+  \end{bulletlist}
+\BLOCK{endfor}
+\end{headlist}
+\BLOCK{endif}
+
+\BLOCK{if skills}
+%% ---------- Skills ----------
+\section{Technical Skills}
+\begin{headlist}
+  \small{\item{
+  \BLOCK{for s in skills}
+    \textbf{\VAR{s.category}}{: \VAR{s.list}} \\
+  \BLOCK{endfor}
+  }}
+\end{headlist}
+\BLOCK{endif}
+
+\end{document}

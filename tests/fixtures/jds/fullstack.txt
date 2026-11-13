@@ -1,0 +1,15 @@
+Full Stack Developer Co-op (TypeScript)
+Join our product team building tools used by thousands of students.
+
+You will
+* Build features end to end with Next.js, React and TypeScript
+* Design REST APIs with Node.js/Express and PostgreSQL (Prisma)
+* Implement authentication (OAuth, SSO) and role-based access
+* Write Playwright end-to-end tests and deploy on Vercel
+
+What we're looking for
+* Strong TypeScript and React skills
+* Experience with SQL databases
+* You have shipped at least one full-stack project
+
+Nice to haves: Tailwind CSS, Supabase, GCP, web scraping experience

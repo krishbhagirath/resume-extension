@@ -1,0 +1,17 @@
+Computer Vision Intern, Perception
+We're building autonomous drones that see the world.
+
+What you'll work on
+- Develop object detection and tracking models (YOLO, CNNs) with PyTorch and OpenCV
+- Deploy lightweight vision models on NVIDIA Jetson and other edge devices
+- Build simulation pipelines (Gazebo, ROS 2) to validate perception in the loop
+- Benchmark model accuracy and latency on embedded hardware
+
+You have
+- Experience with computer vision and deep learning in Python
+- Experience with OpenCV and image processing
+- Comfort working in Linux and with C++
+
+Bonus
+- ROS experience, SLAM or sensor fusion
+- Experience with drones or robotics competitions

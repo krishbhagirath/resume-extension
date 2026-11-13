@@ -1,0 +1,9 @@
+fastapi>=0.110
+uvicorn>=0.29
+pydantic>=2.6
+pyyaml>=6.0
+jinja2>=3.1
+pypdf>=4.0
+pdfplumber>=0.11
+python-dotenv>=1.0
+anthropic>=0.40  # only used if you switch ENGINE=api (paid API); the default uses your Claude plan

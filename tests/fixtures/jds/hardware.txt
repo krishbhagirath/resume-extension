@@ -1,0 +1,18 @@
+Hardware Design Verification Intern - AI Accelerators
+
+Help us build the next generation of neural network accelerators.
+
+Responsibilities
+- Write SystemVerilog RTL and testbenches for compute blocks (MAC arrays, FSM controllers)
+- Build cocotb and Verilator regression suites against Python golden models
+- Work on INT8 quantization flows from PyTorch/ONNX models down to hardware
+- Debug designs on FPGA platforms
+
+Requirements
+- Experience with Verilog or SystemVerilog and digital design
+- Python scripting for verification
+- Computer architecture coursework
+
+Nice to have
+- Compiler experience (MLIR, LLVM)
+- Experience with UVM

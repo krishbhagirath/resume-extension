@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="rt-token" content="__RT_TOKEN__">
+<title>Resume Tailor</title>
+<style>
+:root {
+  --paper: #F5F7FA; --sheet: #FFFFFF; --ink: #18202E; --slate: #5A6578; --rule: #D8DEE7; --soft: #EEF1F5;
+  --mark: #FFE14D; --mark-ink: #18202E; --error: #B8322A; --ok: #1E7B4C; --warn: #946200; --focus: #2F6FEB;
+  --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --paper: #12161E; --sheet: #1A202B; --ink: #E7EBF2; --slate: #97A1B3; --rule: #2C3443; --soft: #222937;
+          --mark: #E8C93A; --mark-ink: #12161E; --error: #F07A6E; --ok: #5BC48D; --warn: #E0B341; --focus: #7AA5FF; }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--paper); color: var(--ink); font: 14px/1.5 var(--font); }
+button, input, textarea, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+[hidden] { display: none !important; }
+
+header { display: flex; align-items: center; gap: 24px; padding: 12px 24px; border-bottom: 1px solid var(--rule); flex-wrap: wrap; background: var(--sheet); position: sticky; top: 0; z-index: 5; }
+header h1 { font-size: 16px; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
+nav { display: flex; gap: 2px; }
+nav button { background: none; border: 0; padding: 5px 11px; border-radius: 6px; color: var(--slate); cursor: pointer; }
+nav button[aria-selected="true"] { color: var(--ink); background: var(--soft); }
+#status { margin-left: auto; color: var(--slate); font-size: 12.5px; display: flex; gap: 8px; align-items: center; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--slate); display: inline-block; }
+.dot.ok { background: var(--ok); } .dot.bad { background: var(--error); } .dot.warn { background: var(--warn); }
+
+main { padding: 20px 24px 64px; }
+label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--slate); min-width: 0; }
+label.inline { flex-direction: row; align-items: center; gap: 6px; font-size: 13px; color: var(--ink); }
+input:not([type=checkbox]):not([type=file]), textarea, select { width: 100%; background: var(--sheet); border: 1px solid var(--rule); border-radius: 7px; padding: 7px 9px; }
+textarea { resize: vertical; }
+.hint { font-size: 12.5px; color: var(--slate); margin: 0; }
+.primary, .quiet, .ghost { border-radius: 7px; padding: 7px 12px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; font-size: 13px; white-space: nowrap; }
+.primary { background: var(--ink); color: var(--paper); border: 0; font-weight: 600; }
+.primary:disabled { opacity: .5; cursor: default; }
+.quiet { background: var(--sheet); color: var(--ink); border: 1px solid var(--rule); }
+.ghost { background: none; border: 0; color: var(--slate); padding: 4px 7px; }
+.ghost:hover, .quiet:hover { color: var(--ink); background: var(--soft); }
+.danger { color: var(--error) !important; }
+.error { color: var(--error); white-space: pre-wrap; font-size: 13px; margin: 0; }
+.chip { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 12px; background: var(--soft); color: var(--slate); margin: 2px 4px 2px 0; }
+.chip.ok { color: var(--ok); } .chip.bad { color: var(--error); } .chip.warn { color: var(--warn); }
+.spin { display: inline-block; width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: s .7s linear infinite; }
+@keyframes s { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation-duration: 2.4s; } }
+.card { background: var(--sheet); border: 1px solid var(--rule); border-radius: 10px; }
+
+/* Tailor */
+.desk { display: grid; grid-template-columns: minmax(300px, 420px) 1fr; gap: 24px; align-items: start; }
+@media (max-width: 920px) { .desk { grid-template-columns: 1fr; } }
+.posting { position: sticky; top: 72px; display: flex; flex-direction: column; gap: 10px; }
+.row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+#jd { min-height: 42vh; line-height: 1.45; }
+.steps { list-style: none; margin: 0; padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; }
+.steps li { display: flex; align-items: center; gap: 8px; color: var(--slate); font-size: 13px; }
+.steps li.done { color: var(--ink); } .steps li.now { color: var(--ink); font-weight: 600; }
+.steps li .ic { width: 14px; text-align: center; }
+.proof-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.proof-bar h2 { margin: 0; font-size: 15px; font-weight: 600; word-break: break-all; }
+.proof-bar .actions { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+.pdf { width: 100%; height: 78vh; border: 1px solid var(--rule); border-radius: 6px; background: var(--sheet); display: block; }
+.empty { border: 1px dashed var(--rule); border-radius: 10px; min-height: 50vh; display: grid; place-items: center; color: var(--slate); text-align: center; padding: 24px; }
+.score { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; margin: 14px 0; }
+.score div { padding: 9px 11px; }
+.score b { display: block; font-size: 18px; font-variant-numeric: tabular-nums; }
+.score span { font-size: 12px; color: var(--slate); }
+.prov h3 { font-size: 14px; margin: 18px 0 6px; }
+.prov .item { margin: 10px 0; }
+.prov .item h4 { margin: 0 0 3px; font-size: 13px; }
+.prov ul { margin: 0; padding-left: 18px; }
+.prov li { margin: 3px 0; max-width: 95ch; }
+.prov .tag { font-size: 11px; color: var(--slate); margin-left: 6px; }
+.prov .rej { color: var(--slate); font-size: 12px; }
+details summary { cursor: pointer; color: var(--slate); font-size: 13px; }
+
+/* Bank editor */
+.bankbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; position: sticky; top: 56px; background: var(--paper); padding: 8px 0; z-index: 4; }
+.bankbar input[type=search] { max-width: 260px; }
+.bankbar select { width: auto; }
+#saveState { font-size: 12.5px; color: var(--slate); margin-left: auto; }
+#saveState.dirty { color: var(--warn); } #saveState.bad { color: var(--error); }
+.editor { display: flex; flex-direction: column; gap: 8px; max-width: 1060px; }
+.sec-title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--slate); margin: 18px 0 2px; display: flex; align-items: center; gap: 8px; }
+.item > .head { display: flex; align-items: center; gap: 8px; padding: 9px 10px 9px 12px; cursor: pointer; }
+.item > .head .t { font-weight: 600; } .item > .head .o { color: var(--slate); }
+.item > .head .tools { margin-left: auto; display: flex; gap: 0; }
+.item.hidden-item { opacity: .6; }
+.item .body { border-top: 1px solid var(--rule); padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.grid .w2 { grid-column: span 2; } .grid .w4 { grid-column: 1 / -1; }
+@media (max-width: 760px) { .grid { grid-template-columns: 1fr 1fr; } }
+.bullet { display: grid; grid-template-columns: 1fr auto; gap: 6px 8px; padding: 8px; border: 1px solid var(--rule); border-radius: 8px; }
+.bullet textarea { min-height: 52px; font-size: 13.5px; }
+.bullet .meta { grid-column: 1 / -1; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.bullet .meta input:not([type=checkbox]), .bullet .meta select { width: 150px; padding: 4px 7px; font-size: 12px; }
+.bullet .side { display: flex; flex-direction: column; gap: 0; }
+.bullet .preview { grid-column: 1 / -1; font-size: 12px; color: var(--slate); }
+.bullet.alt { margin-left: 22px; border-style: dashed; }
+.invalid { border-color: var(--error) !important; }
+.errmsg { color: var(--error); font-size: 12px; }
+.errlist { background: var(--sheet); border: 1px solid var(--error); border-radius: 8px; padding: 10px 14px; margin-bottom: 10px; }
+.errlist ul { margin: 4px 0 0; padding-left: 18px; font-size: 13px; }
+.errlist a { color: var(--error); }
+#yaml { min-height: 70vh; font: 12.5px/1.5 var(--mono); tab-size: 2; }
+.panel { padding: 14px; margin-bottom: 12px; }
+.panel h3 { margin: 0 0 8px; font-size: 14px; }
+.draft { border-top: 1px solid var(--rule); padding: 8px 0; }
+.draft ul { margin: 4px 0; padding-left: 22px; list-style: none; }
+.draft li label { flex-direction: row; gap: 6px; color: var(--ink); font-size: 13px; align-items: flex-start; }
+
+/* History / settings */
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; max-width: 1150px; min-width: 620px; }
+th, td { text-align: left; padding: 8px 12px 8px 0; border-bottom: 1px solid var(--rule); vertical-align: top; font-size: 13px; }
+th { font-weight: 600; color: var(--slate); font-size: 12px; }
+td a { color: inherit; }
+.settings { max-width: 760px; display: flex; flex-direction: column; gap: 14px; }
+.settings .panel { display: flex; flex-direction: column; gap: 10px; }
+pre.diag { font: 12px/1.45 var(--mono); background: var(--soft); padding: 10px; border-radius: 8px; overflow: auto; max-height: 360px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Resume Tailor</h1>
+  <nav role="tablist" aria-label="Sections">
+    <button role="tab" data-view="tailor" aria-selected="true">Tailor</button>
+    <button role="tab" data-view="bank" aria-selected="false">Experience bank</button>
+    <button role="tab" data-view="history" aria-selected="false">History</button>
+    <button role="tab" data-view="settings" aria-selected="false">Settings</button>
+  </nav>
+  <div id="status"><span class="dot"></span><span>Connecting…</span></div>
+</header>
+
+<main>
+  <!-- ======================= Tailor ======================= -->
+  <section class="view" id="view-tailor">
+    <div class="desk">
+      <form class="posting" id="form">
+        <div class="row">
+          <label>Company <input id="company" placeholder="Found from the posting" autocomplete="off" maxlength="120"></label>
+          <label>Role <input id="role" placeholder="Found from the posting" autocomplete="off" maxlength="200"></label>
+        </div>
+        <label>Job posting <textarea id="jd" placeholder="Paste the full job description" maxlength="60000"></textarea></label>
+        <label class="inline"><input type="checkbox" id="rephrase"> Allow light rewording (a few bullets, fact- and line-checked)</label>
+        <div style="display:flex;gap:8px">
+          <button class="primary" id="go" type="submit">Make resume</button>
+          <button class="quiet" id="cancel" type="button" hidden>Cancel</button>
+        </div>
+        <p class="hint">Ctrl + Enter also works. Only accomplishments from your bank are used.</p>
+        <p class="error" id="err" role="alert"></p>
+        <div class="card" id="progress" hidden><ol class="steps" id="steps"></ol></div>
+      </form>
+      <div id="proof"><div class="empty">Paste a posting and make a resume.<br>The PDF and a breakdown of what was picked show up here.</div></div>
+    </div>
+  </section>
+
+  <!-- ======================= Bank ======================= -->
+  <section class="view" id="view-bank" hidden>
+    <div class="bankbar">
+      <nav role="tablist" aria-label="Bank editor mode">
+        <button role="tab" data-mode="cards" aria-selected="true">Editor</button>
+        <button role="tab" data-mode="yaml" aria-selected="false">YAML</button>
+      </nav>
+      <input type="search" id="q" placeholder="Search bullets, skills, titles" aria-label="Search the bank">
+      <select id="filter" aria-label="Filter">
+        <option value="">Everything</option><option value="experiences">Experience</option><option value="projects">Projects</option>
+        <option value="pinned">Pinned</option><option value="hidden">Hidden</option><option value="short">Short last lines</option>
+      </select>
+      <button class="quiet" id="importPdfBtn" type="button">Import from resume PDF</button>
+      <input type="file" id="importPdf" accept="application/pdf" hidden>
+      <button class="ghost" id="importJsonBtn" type="button">Import JSON</button>
+      <input type="file" id="importJson" accept="application/json,.json" hidden>
+      <a class="ghost" id="exportJson" href="#">Export JSON</a>
+      <span id="saveState">Loading…</span>
+      <button class="primary" id="saveBank" type="button">Save</button>
+    </div>
+    <div id="importPanel"></div>
+    <div id="errPanel"></div>
+    <div class="editor" id="editor"></div>
+    <div id="yamlBox" hidden>
+      <p class="hint" style="margin-bottom:8px">The file itself: <code>data/experiences.yaml</code>. Comments are kept when you save here. A backup is made on every save.</p>
+      <textarea id="yaml" spellcheck="false" aria-label="Experience bank YAML"></textarea>
+    </div>
+  </section>
+
+  <!-- ======================= History ======================= -->
+  <section class="view" id="view-history" hidden>
+    <p class="hint">Claude usage counts against Resume Tailor's Claude plan, not API credits. Dollar amounts are what the same tokens would cost on the API, for comparison only.</p>
+    <div class="score" id="usage"></div>
+    <div class="scroll"><table>
+      <thead><tr><th>Made</th><th>Company</th><th>Role</th><th>Coverage</th><th>Fit</th><th>File</th><th></th></tr></thead>
+      <tbody id="hist"></tbody>
+    </table></div>
+  </section>
+
+  <!-- ======================= Settings ======================= -->
+  <section class="view" id="view-settings" hidden>
+    <div class="settings">
+      <div class="card panel" id="settingsForm">
+        <h3>Resume rules</h3>
+        <div class="grid">
+          <label class="w2">Template <select data-s="template" id="tplSelect"></select></label>
+          <label>Max experiences <input type="number" min="1" max="8" data-s="max_experiences"></label>
+          <label>Max projects <input type="number" min="0" max="8" data-s="max_projects"></label>
+          <label>Min bullets per item <input type="number" min="1" max="8" data-s="min_bullets_per_item"></label>
+          <label>Max bullets per item <input type="number" min="1" max="8" data-s="max_bullets_per_item"></label>
+          <label>Max rewordings per resume <input type="number" min="0" max="10" data-s="max_rephrase"></label>
+          <label>Min. last-line fill (0-1) <input type="number" min="0" max="1" step="0.05" data-s="min_last_line_fill"></label>
+          <label class="w2">Order <select data-s="keep_bank_order">
+            <option value="experiences">Experience in bank order, projects by relevance</option>
+            <option value="true">Everything in bank order</option>
+            <option value="false">Everything by relevance</option></select></label>
+          <label class="w4">File name <input data-s="filename_pattern" placeholder="{first}_{last}_{company}_{role}_Resume"></label>
+        </div>
+        <label class="inline"><input type="checkbox" data-s="rephrase"> Allow light rewording (off = your exact words). Only bullets with a short last line, or tagged with a skill the job wants, are touched, at most the number above. Each must keep XYZ form and its numbers, use only facts from that bullet, and fit one line or nearly two full lines, checked in the real PDF; anything that fails keeps your wording.</label>
+        <label class="inline"><input type="checkbox" data-s="strict_lines"> Never print a bullet that leaves a word or two on its own line (a clean wording is used instead; the bullet is skipped if there isn't one)</label>
+        <label class="inline"><input type="checkbox" data-s="latex_bullets"> Bullets contain LaTeX formatting (\textbf{}, \%, $\times$)</label>
+        <div><button class="primary" id="saveSettings" type="button">Save settings</button> <span class="hint" id="settingsMsg"></span></div>
+      </div>
+      <div class="card panel">
+        <h3>Chrome extension</h3>
+        <p class="hint" id="pairInfo">…</p>
+        <div><button class="quiet" id="resetPair" type="button">Reset pairing</button></div>
+      </div>
+      <div class="card panel">
+        <h3>Diagnostics</h3>
+        <p class="hint">What the server sees right now. Nothing here leaves your computer.</p>
+        <div><button class="quiet" id="loadDiag" type="button">Refresh</button></div>
+        <pre class="diag" id="diag">Press Refresh.</pre>
+      </div>
+    </div>
+  </section>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>

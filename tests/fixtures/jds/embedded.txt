@@ -1,0 +1,20 @@
+Firmware Engineering Intern (Winter 2027)
+
+The Role
+You will write embedded C/C++ firmware for STM32 and other ARM microcontrollers running FreeRTOS, and bring up drivers for I2C, SPI, UART and CAN peripherals.
+
+Responsibilities
+- Develop and debug firmware on microcontrollers, using oscilloscopes and logic analyzers
+- Implement communication protocols (UART, I2C, SPI, CAN bus)
+- Build Python test automation for hardware-in-the-loop validation
+- Work with control loops (PID) for motor control
+
+Required Qualifications
+- Proficiency in C and C++
+- Experience with microcontrollers and embedded systems
+- Understanding of interrupts, DMA and real-time constraints
+
+Preferred
+- Experience with RTOS (FreeRTOS, Zephyr)
+- Familiarity with TinyML or edge ML is a plus
+- Linux and Git experience

@@ -1,0 +1,24 @@
+Software Engineering Intern, Backend (Summer 2027)
+
+About the team
+Our Payments Platform team builds the APIs that move money for millions of merchants.
+
+What you'll do
+- Design and build RESTful APIs and backend services in Go or Java
+- Improve latency and reliability of high-throughput services; profile and optimize SQL queries in PostgreSQL
+- Write unit and integration tests and ship through our CI/CD pipelines (GitHub Actions)
+- Deploy containerized services with Docker and Kubernetes on AWS
+
+Requirements
+- Currently pursuing a degree in Computer Science, Computer Engineering or similar
+- Experience with at least one of: Java, Go, Python
+- Strong understanding of data structures, algorithms and relational databases (SQL)
+- Experience building and testing backend services
+
+Nice to have
+- Experience with Kafka or other message queues
+- Familiarity with Redis caching and distributed systems
+- Exposure to AWS S3, IAM, or other cloud services
+
+Benefits
+Competitive pay, health benefits, and a learning budget. We are an equal opportunity employer.

@@ -1,0 +1,40 @@
+{
+  "main": "main.tex.j2",
+  "overleaf_engine": "pdflatex",
+  "layout": {
+    "item_gap": {
+      "default": -2,
+      "min": -3.5,
+      "max": 0,
+      "step": 0.5
+    },
+    "list_gap": {
+      "default": -5,
+      "min": -7,
+      "max": -2,
+      "step": 1
+    },
+    "section_gap": {
+      "default": -4,
+      "min": -6,
+      "max": 0,
+      "step": 1
+    },
+    "heading_gap": {
+      "default": -7,
+      "min": -8,
+      "max": -5,
+      "step": 0.5
+    }
+  },
+  "page": {
+    "width_pt": 612,
+    "height_pt": 792,
+    "min_font_pt": 8.5,
+    "target_bottom_gap_pt": [
+      8,
+      28
+    ],
+    "calibration": "Bottom gap of the hand-made Overleaf resumes measured 11-14pt."
+  }
+}

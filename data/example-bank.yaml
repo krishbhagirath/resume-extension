@@ -1,0 +1,482 @@
+# Example experience bank (copy to data/experiences.yaml and make it yours).
+# Krish's experience bank. Everything goes here; each resume picks what fits the job.
+#
+# Sources: your 4 resumes (General, AI, DL, Embedded) come first, word for word.
+# Ids ending in -site are details from krishbhagirath.com that aren't on any resume.
+# Ids ending in -alt are alternate wordings (alt_of says of which bullet): Claude may
+# pick one instead of the main version, never both, and they never fill space.
+#
+# Formatting: bullets are LaTeX (latex_bullets: true). \textbf{bold}, \% for %,
+# \$ for $, $\times$ for x, \& for &. Keep bullets in 'single quotes' ('' = apostrophe).
+# overlaps: an experience and a project about the same work. Only one gets picked.
+
+profile:
+  first_name: Krish
+  last_name: Bhagirath
+  email: you@example.com
+  location: Hamilton, ON
+  links:
+    - label: linkedin.com/in/krishbhagirath
+      url: https://www.linkedin.com/in/krish-bhagirath/
+      icon: faLinkedin
+    - label: krishbhagirath.com
+      url: https://krishbhagirath.com
+      icon: faGlobe
+
+settings:
+  template: jakes
+  latex_bullets: true
+  max_experiences: 4
+  max_projects: 4
+  max_bullets_per_item: 5
+  min_bullets_per_item: 2
+  keep_bank_order: experiences   # jobs print in the order below; projects print most relevant first
+  strict_lines: true             # never print a bullet that leaves a word or two on its own line
+
+education:
+  - school: McMaster University
+    location: Hamilton, ON
+    degree: Bachelor of Engineering in Computer Engineering
+    dates: Sep. 2024 - Apr. 2028
+    bullets:
+      - '\textbf{GPA:} 3.9/4.0, Dean''s Honour List (first year)'
+      - 'Awarded \$20,000+ in merit-based entrance scholarships for academic excellence.'
+      - '\textbf{Relevant Coursework:} Data Structures \& Algorithms, Statistics, Logic Design, Microprocessor Systems'
+
+experiences:
+  # ---------------- Work ----------------
+  - id: mobilitiq
+    title: AI/ML Engineer Intern
+    org: MobilitiQ
+    location: Hamilton, ON
+    dates: Apr. 2026 -- Present
+    tags: [machine-learning, reinforcement-learning, python, pytorch, tensorflow, onnx, fastapi, react-native, simulation, algorithms, forecasting]
+    bullets:
+      - id: mq-sim-speedup
+        text: 'Accelerated Austin ride-hailing simulation \textbf{19$\times$} using A* routing and k-d tree candidate pruning.'
+      - id: mq-ems-sim
+        text: 'Engineered a discrete-event EMS simulator with precomputed Dijkstra travel-time tables and MEXCLP ambulance allocation; simulated \textbf{6,000} calls for \textbf{300} ambulances on a 75K-node graph in \textbf{1.8s}.'
+      - id: mq-lstm
+        text: 'Developed TensorFlow LSTM forecasts on \textbf{757K+} Austin trips; seasonal ensembling cut offline MAE by \textbf{17\%}.'
+      - id: mq-ppo
+        text: 'Trained PPO across \textbf{128} parallel simulators; served ONNX policies via FastAPI with \textbf{8e-7} PyTorch parity.'
+      - id: mq-replay
+        text: 'Built FastAPI/React Native EMS replay, generating 300-unit map frames in \textbf{6.8ms} median latency.'
+      - id: mq-dashboard-alt
+        alt_of: mq-replay
+        text: 'Built a full-stack \textbf{ridesharing operator dashboard} using FastAPI and React Native with OSMnx, Leaflet demand zones, and KPI endpoints to visualize zone-based NYC \textbf{demand predictions} and \textbf{vehicle allocation.}'
+      - id: mq-reward-bug-alt
+        alt_of: mq-ppo
+        text: 'Fixed a \textbf{PPO} reward bug that under-weighted efficiency by \textbf{200x}, improving repositioning across fleet sizes.'
+      - id: mq-ems-coverage-alt
+        alt_of: mq-ems-sim
+        text: 'Built an \textbf{EMS simulator} that raised 8-minute response coverage by \textbf{15.7\%} via dynamic ambulance repositioning.'
+
+  - id: novologic
+    title: Software Engineer Intern
+    org: Novologic
+    location: Toronto, ON
+    dates: May 2025 -- Aug. 2025
+    tags: [backend, php, laravel, mysql, sql, react, aws, s3, ci, github-actions, testing, llm, rag]
+    bullets:
+      - id: nv-refactor
+        text: 'Refactored \textbf{15+} Laravel controllers into dependency-injected services and repositories; integrated PHPUnit regression suites into GitHub Actions CI, increasing code coverage from \textbf{65\% to 100\%}.'
+      - id: nv-latency
+        text: 'Reduced dashboard API p95 latency from \textbf{480 to 210 ms} via Eloquent eager loading and composite MySQL indexes.'
+      - id: nv-rag
+        text: 'Deployed a React RAG assistant with Gemini and semantic document search, utilized by \textbf{20+ clients} daily.'
+      - id: nv-hubspot
+        text: 'Automated HubSpot lead intake with webhooks and idempotent upserts, processing \textbf{250 inquiries/month}.'
+      - id: nv-s3
+        text: 'Secured \textbf{750+} document uploads across \textbf{6+} clients using AWS S3 presigned URLs and tenant-scoped authorization.'
+      - id: nv-email-alt
+        text: 'Designed HTML/CSS email templates for CRM campaigns that generated \textbf{10+ qualified leads} via \textbf{A/B testing}.'
+
+  # ---------------- Clubs and design teams ----------------
+  - id: mac-drone
+    kind: team
+    title: Machine Learning Developer
+    org: McMaster Aerial Robotics & Drone Club
+    location: Hamilton, ON
+    dates: Oct. 2025 -- Present
+    tags: [computer-vision, opencv, cnn, yolo, tensorflow, robotics, drones, linux, jetson, embedded, simulation]
+    bullets:
+      - id: md-cv
+        text: 'Benchmarked OpenCV HoughCircles and fine-tuned CNN detectors, yielding \textbf{95\%} blob-detection accuracy within 5m.'
+      - id: md-sitl
+        text: 'Developing software-in-the-loop (\textbf{SITL}) drone simulations on \textbf{Linux VM} with \textbf{DroneKit} to validate autonomy logic.'
+      - id: md-lidar
+        text: 'Building a \textbf{2D LiDAR} wall-following system on \textbf{Jetson Nano} as a lightweight alternative to SLAM-based navigation.'
+      - id: md-yolo-site-alt
+        alt_of: md-cv
+        text: 'Training real-time circle detection models with \textbf{TensorFlow} and \textbf{YOLO} for mission-specific vision tasks.'
+      - id: md-gazebo-site-alt
+        alt_of: md-sitl
+        text: 'Developing SITL drone simulations with \textbf{Gazebo} and \textbf{DroneKit} to validate autonomous flight logic.'
+
+  - id: macai
+    kind: team
+    title: Machine Learning Project Member
+    org: McMaster Artificial Intelligence Society
+    location: Hamilton, ON
+    dates: Oct. 2025 -- Present
+    overlaps: [deepfakedetector]
+    tags: [machine-learning, deep-learning, computer-vision, vision-transformer, pytorch, research]
+    bullets:
+      - id: mai-vit-site
+        text: 'Fine-tuning \textbf{Vision Transformers} with custom classification heads for DeepFakeDetector across diverse datasets.'
+      - id: mai-team-site
+        text: 'Contributing to research and modeling in a \textbf{6-member} team building an interpretable AI-image detector.'
+
+  - id: medt
+    kind: team
+    title: Software Developer
+    org: McMaster MedT (Medical Engineering Design Team)
+    location: Hamilton, ON
+    dates: Sep. 2024 -- Present
+    overlaps: [cradlewatch, valid]
+    tags: [healthcare, machine-learning, nlp, computer-vision, raspberry-pi, python, teamwork]
+    bullets:
+      - id: mt-cradle-site
+        text: 'Helped build \textbf{CradleWatch}, a real-time infant monitoring system that alerts caregivers of distress.'
+      - id: mt-team-site
+        text: 'Collaborated with software, electrical and mechanical sub-teams to deliver a cross-disciplinary prototype.'
+      - id: mt-valid-site
+        text: 'Contributing to VALID, a \textbf{ClinicalBERT}-based CT-scan decision model built to reduce unnecessary imaging.'
+
+  - id: robosub
+    kind: team
+    title: Computer Vision Subteam Member
+    org: McMaster RoboSub
+    location: Hamilton, ON
+    dates: Feb. 2025 -- Sep. 2025
+    tags: [computer-vision, robotics, ros2, gazebo, pytorch, tensorflow, simulation]
+    bullets:
+      - id: rs-benchmark-site
+        text: 'Researched datasets and benchmarked hardware and software to fit vision models to \textbf{AUV} mission needs.'
+      - id: rs-tools-site
+        text: 'Worked with \textbf{ROS2}, \textbf{Gazebo}, PyTorch, and TensorFlow on AI-driven vision for autonomous underwater vehicles.'
+
+  - id: frc-772
+    title: Software Team Lead
+    org: FIRST Robotics Competition (FRC) Team 772
+    location: LaSalle, ON
+    dates: Feb. 2021 -- Jan. 2024
+    tags: [c++, java, robotics, embedded, controls, pid, can, leadership, mentoring]
+    bullets:
+      - id: frc-lead
+        text: 'Led a \textbf{10+ member} FRC team developing \textbf{C++/WPILib} robot controls with CAN-bus and \textbf{50 Hz PID} loops.'
+      - id: frc-swerve
+        text: 'Built \textbf{4-module} field-oriented swerve drive with Limelight vision, achieving \textbf{±2° target alignment accuracy}.'
+      - id: frc-training-site
+        text: 'Ran hands-on \textbf{C++} and \textbf{Java} training on object-oriented design to prepare members for competition.'
+      - id: frc-sprints-site-alt
+        alt_of: frc-lead
+        text: 'Led a programming team of \textbf{10} developers, managing task delegation, sprint planning, and milestone execution.'
+
+  - id: tutor
+    kind: other
+    title: STEM Tutor
+    org: Self-Employed
+    location: ''
+    dates: Sep. 2021 -- Present
+    tags: [teaching, mentoring, communication, math, physics]
+    bullets:
+      - id: tu-stem-site
+        text: 'Tutored local high school students in STEM subjects, including mathematics, physics, and computer science.'
+      - id: tu-results-site
+        text: 'Helped students strengthen core concepts, improve grades, and build confidence in problem-solving.'
+
+  # ---------------- Leadership and volunteering ----------------
+  - id: ucmas
+    title: Teaching Assistant
+    org: UCMAS
+    location: ''
+    dates: Sep. 2022 -- Sep. 2024
+    tags: [teaching, arduino, c, robotics, mentoring]
+    bullets:
+      - id: uc-teach-site
+        text: 'Taught \textbf{Arduino} fundamentals, circuitry and \textbf{C} programming after promotion from the UCMAS robotics program.'
+      - id: uc-mentor-site
+        text: 'Mentored diverse student groups, adapting lessons to each skill level and troubleshooting robotics problems.'
+
+  - id: deca
+    title: President
+    org: DECA, Sandwich Secondary School
+    location: LaSalle, ON
+    dates: Sep. 2022 -- Jun. 2024
+    tags: [leadership, business, entrepreneurship, management]
+    bullets:
+      - id: de-plan-site
+        text: 'Led the development of a \textbf{province-winning} business plan in the 2022--2023 DECA competition.'
+      - id: de-chapter-site
+        text: 'Led a \textbf{30-member} chapter, driving delegation and accountability, and ran mentorship for junior members.'
+
+  - id: mia
+    title: First Year Representative
+    org: McMaster Indian Association
+    location: Hamilton, ON
+    dates: Sep. 2024 -- Aug. 2025
+    tags: [leadership, community, events]
+    bullets:
+      - id: mia-events-site
+        text: 'Organized Indian cultural events on campus, partnering with student groups to grow community engagement.'
+
+projects:
+  - id: partnerup
+    title: PartnerUp
+    stack: TypeScript, Next.js, Node.js, PostgreSQL, Playwright, GCP
+    url: https://github.com/krishbhagirath/partner-system
+    dates: ''
+    tags: [fullstack, web, typescript, nextjs, postgres, prisma, supabase, playwright, scraping, gcp, auth]
+    bullets:
+      - id: pu-platform
+        text: 'Built a Next.js/TypeScript lab-partner matching platform for McMaster students, tested by \textbf{25+} users prelaunch.'
+      - id: pu-mosaic
+        text: 'Automated Mosaic schedule imports by deploying a \textbf{Playwright} worker on \textbf{GCP} to parse and deduplicate schedules into \textbf{PostgreSQL}, reducing manual section entry.'
+      - id: pu-mosaic-alt
+        alt_of: pu-mosaic
+        text: 'Automated Mosaic schedule imports using a \textbf{Playwright} worker on \textbf{GCP}, deduplicating into \textbf{PostgreSQL}.'
+      - id: pu-auth-site
+        text: 'Implemented \textbf{Auth.js} sign-in with email/password and Microsoft Entra ID, restricted to @mcmaster.ca accounts.'
+      - id: pu-queue-site
+        alt_of: pu-mosaic
+        text: 'Capped the Express + \textbf{Playwright} scraper''s job queue at \textbf{2} headless browsers to fit VM memory limits.'
+      - id: pu-stack-site
+        text: 'Shipped on Vercel with \textbf{Prisma} and \textbf{Supabase Postgres}, with partner-request email notifications via Resend.'
+      - id: pu-platform-alt
+        alt_of: pu-platform
+        text: 'Building a \textbf{matching platform} with \textbf{Next.js} and \textbf{TypeScript} for McMaster students to find lab partners.'
+
+  - id: deepfakedetector
+    title: DeepFakeDetector
+    stack: Python, PyTorch, CNN, Vision Transformer, FFT, Next.js, FastAPI
+    url: https://github.com/McMasterAI-Society/DeepFakeDetector
+    dates: ''
+    tags: [machine-learning, deep-learning, computer-vision, pytorch, vision-transformer, cnn, research, fastapi, nextjs]
+    bullets:
+      - id: df-hybrid
+        text: 'Developed a \textbf{4-branch} hybrid deepfake detection model combining CNN, ViT, FFT, and gradient-based features for \textbf{cross-generator generalization}, achieving up to \textbf{96.7\%} accuracy on AI-GenBench and OpenFake benchmarks.'
+      - id: df-vit
+        text: 'Enhanced ViT performance by \textbf{14\%} via fine-tuning DeiT models with MLP heads and differential learning rates.'
+      - id: df-web
+        text: 'Implemented a \textbf{Next.js and FastAPI} web app, utilizing \textbf{Grad-CAM} for visual heatmaps of deepfake predictions.'
+      - id: df-datasets-site
+        alt_of: df-vit
+        text: 'Fine-tuned \textbf{Vision Transformers} on OpenFake, WildFake and Dragon, tuning patch sizes and learning rates.'
+      - id: df-team-site
+        alt_of: df-hybrid
+        text: 'Contributed to architecture design, diagramming \textbf{multi-stream feature extraction} and learned feature fusion.'
+
+  - id: valid
+    title: VALID
+    stack: Python, Pandas, NumPy, scikit-learn, PyTorch, XGBoost, ClinicalBERT
+    url: https://drive.google.com/file/d/1ayrYl8K3ZTCnZo7HGaIv4jEMrXu4T92v/view
+    dates: ''
+    tags: [machine-learning, nlp, healthcare, python, pytorch, xgboost, data, award]
+    bullets:
+      - id: va-model
+        text: 'Built a \textbf{CT-scan decision model} to predict imaging necessity at ED triage by developing a ClinicalBERT-based ensemble (MLP, Random Forest, XGBoost), achieving \textbf{91\% precision} and \textbf{88\% recall.}'
+      - id: va-data
+        text: 'Preprocessed \textbf{127K+} MIMIC-IV EHR records via \textbf{Pandas/NumPy} for data cleaning and feature selection/encoding.'
+      - id: va-award
+        text: 'Awarded the \textbf{Responsible AI Award} at CUCAI among \textbf{70+ teams} for strong clinical safety and medical impact.'
+      - id: va-multimodal-site
+        alt_of: va-model
+        text: 'Combined \textbf{ClinicalBERT} note embeddings with patient vitals in a multimodal model tuned to cut false negatives.'
+
+  - id: neuracore
+    title: NeuraCore
+    stack: SystemVerilog, Python, PyTorch, ONNX, Cocotb, Verilator
+    url: https://github.com/krishbhagirath/nn-accelerator
+    dates: ''
+    tags: [hardware, systemverilog, rtl, fpga, verification, compilers, quantization, onnx, computer-architecture, machine-learning]
+    bullets:
+      - id: nc-accel
+        text: 'Developed 4-MAC INT8 \textbf{neural accelerator}, enabling four-neuron parallel inference with automated \textbf{Cocotb} testing.'
+      - id: nc-fsm
+        text: 'Designed an \textbf{FSM controller} sequencing \textbf{16} neurons in batches of 4 with bias add, INT8 rescaling and ReLU.'
+      - id: nc-verify
+        text: 'Verified RTL bit-exact against a Python golden model via \textbf{cocotb/Verilator}: 100 random, 100 PyTorch inputs.'
+      - id: nc-compiler
+        text: 'Built a \textbf{Python} compiler applying post-training \textbf{INT8 quantization} to ONNX layers, emitting RTL weight files.'
+
+  - id: fridgemind
+    title: FridgeMind
+    stack: C, FreeRTOS, STM32 HAL, ESP32, Firebase, TinyML
+    url: https://github.com/krishbhagirath/food-tracker
+    dates: ''
+    tags: [embedded, c, stm32, esp32, uart, interrupts, firmware, iot, firebase, tinyml, machine-learning, testing]
+    bullets:
+      - id: fm-scanner
+        text: 'Integrating a \textbf{GM65} barcode scanner with an \textbf{STM32} over UART using \textbf{FreeRTOS} to enable real-time item tracking.'
+      - id: fm-tinyml
+        text: 'Deploying a \textbf{TinyML LSTM model} via STM32Cube.AI, automating consumption prediction and restocking alerts.'
+      - id: fm-firebase
+        text: 'Bridging the microcontroller to \textbf{Firebase} via ESP32 Wi-Fi, delivering live inventory updates through a mobile app.'
+
+  - id: spatial-mapper
+    title: Spatial Mapper
+    stack: C, MATLAB, I2C, UART, MSP432E401Y, VL53L1X
+    dates: ''
+    tags: [embedded, c, i2c, uart, gpio, matlab, sensors, firmware, hardware-debugging]
+    bullets:
+      - id: sm-maps
+        text: 'Generated \textbf{360° spatial maps} with \textbf{32-point scans} by configuring register-level I2C, GPIO, and ToF interfaces.'
+      - id: sm-uart
+        text: 'Streamed \textbf{115200 baud} scan data through synchronized motor control and UART communication in Embedded C.'
+      - id: sm-pointcloud
+        text: 'Produced \textbf{XYZ point clouds} in \textbf{MATLAB} through spatial mapping and \textbf{oscilloscope}-verified sensor calibration.'
+
+  - id: cradlewatch
+    title: CradleWatch
+    stack: Python, Raspberry Pi, MediaPipe, OpenCV, Flask, Twilio
+    url: https://github.com/krishbhagirath/baby-monitoring-MED-T
+    dates: ''
+    tags: [python, computer-vision, raspberry-pi, embedded, iot, flask, machine-learning, healthcare, i2c]
+    bullets:
+      - id: cw-tracking
+        text: 'Integrated real-time \textbf{facial tracking} and \textbf{emotion detection} with MediaPipe and a Vision Transformer model.'
+      - id: cw-pi
+        text: 'Deployed on \textbf{Raspberry Pi} via Picamera2 and OpenCV, enabling \textbf{servo-based camera control} and video feed.'
+      - id: cw-twilio
+        text: 'Implemented SMS notifications using \textbf{Twilio API} to alert caregivers of prolonged distress, delivering a fully functional prototype for proactive infant care.'
+      - id: cw-twilio-alt
+        alt_of: cw-twilio
+        text: 'Implemented \textbf{Twilio} SMS alerts that notify caregivers of prolonged infant distress in a working prototype.'
+      - id: cw-hardware-site
+        text: 'Drove a dual-axis pan-tilt camera with a \textbf{PCA9685} PWM driver and read environmental sensors over \textbf{I2C}.'
+      - id: cw-team-site
+        text: 'Coordinated with electrical and mechanical sub-teams to integrate servos, camera modules, and 3D-printed parts.'
+
+  - id: hiready
+    title: Hiready
+    stack: Next.js, React, C++, Presage SDK, OpenCV, Gemini API, Google Speech-to-Text, ElevenLabs
+    url: https://github.com/krishbhagirath/Hiready
+    dates: ''
+    tags: [fullstack, ai, llm, nextjs, react, c++, speech, hackathon]
+    bullets:
+      - id: hr-platform
+        text: 'Engineered a \textbf{feedback-driven} interview platform using \textbf{Next.js and React} for voice-driven mock interviews.'
+      - id: hr-voice
+        text: 'Integrated \textbf{Google Speech-to-Text} and \textbf{ElevenLabs} voice agent for live transcription and conversational audio.'
+      - id: hr-presage
+        text: 'Developed backend signal-processing logic with the \textbf{C++ Presage SDK} for webcam-derived physiological stress.'
+      - id: hr-rest
+        text: 'Designed \textbf{REST/JSON}-based service communication to route speech content and physiological stress signals into the \textbf{Gemini API} for personalized interview feedback and stress-management guidance.'
+
+  - id: gitcheck
+    title: GitCheck
+    stack: LangChain, Gemini API, GitHub API, Python, FastAPI, Next.js, Supabase
+    url: https://devpost.com/software/gitcheck
+    dates: ''
+    tags: [ai, llm, agents, langchain, python, fastapi, nextjs, scraping, hackathon]
+    bullets:
+      - id: gc-agent
+        text: 'Built a \textbf{sequential validation agent} with LangChain and Python to eliminate manual hackathon submission review.'
+      - id: gc-scrape
+        text: 'Designed a \textbf{web-scraping pipeline} linking Devpost submissions to their GitHub repos for automated evaluation.'
+      - id: gc-github
+        text: 'Integrated the \textbf{GitHub API} to analyze commit patterns and repository structure to enforce authenticity checks.'
+      - id: gc-deploy
+        text: 'Deployed a \textbf{Next.js} frontend and \textbf{FastAPI} backend generating automated validation scores for organizer decisions.'
+      - id: gc-multiagent-site-alt
+        alt_of: gc-agent
+        text: 'Orchestrated specialized AI agents with \textbf{LangChain} and \textbf{LangGraph} for semantic analysis of code and docs.'
+      - id: gc-timeline-site-alt
+        alt_of: gc-github
+        text: 'Checked Devpost claims against \textbf{GitHub} commit timelines to verify projects were built during the hackathon.'
+
+  - id: courtml
+    title: CourtML
+    stack: Python, scikit-learn, React, Chart.js, GitHub Actions, NBA API
+    url: https://github.com/krishbhagirath/nba-match-predictor
+    dates: ''
+    tags: [machine-learning, python, scikit-learn, data, automation, github-actions, react, sports]
+    bullets:
+      - id: cm-model-site
+        text: 'Trained a \textbf{HistGradientBoostingClassifier} on \textbf{17,000+} NBA games over 8+ seasons for sub-second win odds.'
+      - id: cm-pipeline-site
+        text: 'Automated a daily \textbf{GitHub Actions} inference pipeline that publishes fresh win probabilities and matchup data.'
+      - id: cm-features-site
+        text: 'Engineered matchup features from \textbf{10-game} rolling averages, weighing recent form against head-to-head history.'
+      - id: cm-ui-site
+        text: 'Built a \textbf{React} dashboard with \textbf{Chart.js} charts comparing head-to-head team stats such as the Four Factors.'
+
+  - id: pawgress
+    title: PawGress
+    stack: React Native, TypeScript, JavaScript, Cohere API, Node.js
+    url: https://devpost.com/software/pawgress-t78w9h
+    dates: ''
+    tags: [mobile, react-native, typescript, ai, llm, nlp, hackathon]
+    bullets:
+      - id: pg-app-site
+        text: 'Built a gamified \textbf{React Native} habit tracker at DeltaHacks XI with a dog avatar that evolves with progress.'
+      - id: pg-cohere-site
+        text: 'Integrated the \textbf{Cohere API} to turn daily habit entries into personalized coaching, storing state in AsyncStorage.'
+
+  - id: intellipark
+    title: IntelliPark
+    stack: Arduino, C, Ultrasonic Sensors, Servo Motors, LCD
+    dates: ''
+    tags: [embedded, arduino, c, sensors, robotics, award, entrepreneurship]
+    bullets:
+      - id: ip-award-site
+        text: 'Won \textbf{1st place} at the UCMAS Robotics Innovation Competition with an Arduino smart-parking prototype.'
+      - id: ip-build-site
+        text: 'Detected open spots with ultrasonic sensors, showed live availability on an LCD, and drove servo entry gates.'
+
+  - id: logic-design
+    title: Programmable Logic Design
+    stack: Verilog, Quartus, DE10 FPGA, Digital Logic
+    url: https://drive.google.com/drive/folders/1f5j9WMxIzEll9RHo5fb3HrEXittdcKEK
+    dates: ''
+    tags: [hardware, verilog, fpga, digital-logic, school]
+    bullets:
+      - id: ld-fpga-site
+        text: 'Built 4-bit adder/subtractors, shift registers and counters with K-map minimization on a \textbf{DE10 FPGA}.'
+      - id: ld-verilog-site
+        text: 'Implemented a \textbf{Verilog} decoder and 7-segment driver in Quartus; measured gate delay and EEPROM access time.'
+
+  - id: airport
+    title: Autonomous Airport System
+    stack: Python, Autodesk Inventor, CAD, 3D Printing
+    dates: ''
+    tags: [python, robotics, cad, mechanical, school, teamwork]
+    bullets:
+      - id: ap-qarm-site
+        text: 'Wrote \textbf{Python} scripts for a Q-arm robot to scan luggage barcodes and sort bags in a 9-week team design project.'
+      - id: ap-cad-site
+        text: 'Modeled the luggage transport in \textbf{Autodesk Inventor}, iterating 3D-printed parts to fix ramp alignment.'
+
+  - id: clipcall
+    title: ClipCall
+    stack: Autodesk Inventor, CAD, 3D Printing
+    dates: ''
+    tags: [cad, mechanical, design, school, accessibility]
+    bullets:
+      - id: cc-design-site
+        text: 'Designed a cane-mounted phone holder for a client with Usher syndrome, iterating \textbf{CAD} models for 3D printing.'
+      - id: cc-coordinator-site
+        text: 'As project coordinator, ran meetings and docs, pivoting from a smart cane to a feasible design in \textbf{6} weeks.'
+
+  - id: snake
+    title: Terminal Snake Game
+    stack: C++, OOP
+    url: https://github.com/krishbhagirath/oop-snake-game
+    dates: ''
+    tags: [c++, oop, memory-management, school]
+    bullets:
+      - id: sn-game-site
+        text: 'Built a terminal Snake game in \textbf{C++} with the game loop, input handling, collision rules, and score tracking.'
+      - id: sn-oop-site
+        text: 'Structured the snake, board and food with \textbf{object-oriented design} and manual memory management in C++.'
+
+skills:
+  # Everything you know. Each resume picks and reorders what fits the job.
+  - category: Programming Languages
+    items: [Python, C++, C, Java, TypeScript, JavaScript, SQL, PHP, SystemVerilog, Verilog, MATLAB, HTML/CSS]
+  - category: Frameworks & Libraries
+    items: [PyTorch, TensorFlow, Scikit-learn, XGBoost, OpenCV, NumPy, Pandas, LangChain, React, React Native, Next.js, Node.js, Express, FastAPI, Flask, Laravel, Tailwind CSS, ROS2, FreeRTOS]
+  - category: Tools & Technologies
+    items: [Git, Linux, Docker, PostgreSQL, MySQL, Supabase, Firebase, GCP, AWS, Vercel, Playwright, GitHub Actions, Postman, STM32, ESP32, Arduino, Raspberry Pi, Jetson Nano, Cocotb, Verilator, Quartus, Autodesk Inventor]

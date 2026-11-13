@@ -1,0 +1,7 @@
+{
+  "name": "resume-tailor-dev",
+  "private": true,
+  "description": "Dev-only tooling: type-checks the Chrome extension. Not needed to run Resume Tailor.",
+  "scripts": { "check:ext": "tsc -p extension/tsconfig.json" },
+  "devDependencies": { "typescript": "5.6.3", "@types/chrome": "0.0.280" }
+}

@@ -1,0 +1,6 @@
+#!/bin/sh
+# Test stand-in for Tectonic on Linux CI: XeLaTeX (same engine family) + a Font Awesome stub.
+# Not used on Windows, where setup.bat installs the real Tectonic into bin/.
+here=$(cd "$(dirname "$0")/.." && pwd)
+for a in "$@"; do f="$a"; done
+TEXINPUTS="$here/tex//:" exec xelatex -interaction=nonstopmode -halt-on-error -no-shell-escape "$f" >/dev/null 2>&1

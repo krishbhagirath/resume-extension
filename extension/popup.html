@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+:root { --paper:#F5F7FA; --sheet:#fff; --ink:#18202E; --slate:#5A6578; --rule:#D8DEE7; --error:#B8322A; --ok:#1F7A4D; --focus:#2F6FEB; }
+@media (prefers-color-scheme: dark) { :root { --paper:#12161E; --sheet:#1A202B; --ink:#E7EBF2; --slate:#97A1B3; --rule:#2C3443; --error:#F07A6E; --ok:#5FD19B; --focus:#7AA5FF; } }
+* { box-sizing: border-box; }
+body { margin: 0; width: 320px; padding: 14px; background: var(--paper); color: var(--ink); font: 13px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; }
+h1 { font-size: 14.5px; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--slate); }
+.dot.ok { background: var(--ok); } .dot.bad { background: var(--error); }
+button { font: inherit; cursor: pointer; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.primary { width: 100%; font-weight: 600; background: var(--ink); color: var(--paper); border: 0; border-radius: 7px; padding: 9px; margin-bottom: 8px; }
+.secondary { width: 100%; background: var(--sheet); color: var(--ink); border: 1px solid var(--rule); border-radius: 7px; padding: 8px; }
+.link { background: none; border: 0; padding: 0; color: inherit; text-decoration: underline; }
+#msg { margin: 8px 0 0; min-height: 1em; white-space: pre-wrap; color: var(--slate); }
+#msg.err { color: var(--error); }
+.settings { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--rule); color: var(--slate); display: flex; flex-direction: column; gap: 8px; }
+label.check { display: flex; align-items: center; gap: 8px; color: var(--ink); }
+.line { display: flex; justify-content: space-between; gap: 8px; }
+input[type=text] { width: 100%; font: inherit; color: var(--ink); background: var(--sheet); border: 1px solid var(--rule); border-radius: 7px; padding: 6px 8px; margin-top: 4px; }
+</style>
+</head>
+<body>
+  <h1><span class="dot" id="dot"></span><span>Resume Tailor</span></h1>
+  <button class="primary" id="open">Tailor resume to this page</button>
+  <button class="secondary" id="openApp">Open Resume Tailor (paste a posting)</button>
+  <p id="msg" role="status"></p>
+  <div class="settings">
+    <label class="check"><input type="checkbox" id="showButton"> Show the Tailor resume button on job pages</label>
+    <div class="line" id="siteLine" hidden><span id="siteText"></span><button class="link" id="unhide">Show it here again</button></div>
+    <details>
+      <summary>Server address</summary>
+      <input type="text" id="serverUrl" placeholder="http://127.0.0.1:8765" aria-label="Server address">
+    </details>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
