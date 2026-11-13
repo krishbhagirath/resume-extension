@@ -13,11 +13,13 @@ import base64
 import html
 import json
 import os
+import random
 import re
 import secrets
 import sys
 import time
 from pathlib import Path
+from typing import Literal
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
@@ -33,8 +35,10 @@ load_dotenv(ROOT / ".env")
 import analyzer  # noqa: E402
 import bank as bankmod  # noqa: E402
 import importer  # noqa: E402
+import layout  # noqa: E402
 import linefit  # noqa: E402
 import llm  # noqa: E402
+import picks  # noqa: E402
 import pipeline  # noqa: E402
 import render  # noqa: E402
 
@@ -232,6 +236,7 @@ class JobRequest(BaseModel):
     rephrase: bool | None = None  # None = use the setting
     source: str = Field("", max_length=40)   # e.g. "greenhouse", "jsonld", "manual"
     confidence: float | None = None
+    variant: Literal["claude", "matcher"] = "claude"   # matcher = skip the Claude re-rank
 
 
 @app.post("/api/jobs")
@@ -241,6 +246,41 @@ def create_job(req: JobRequest):
     _bank_or_400()
     job = store.start(req.model_dump())
     return job.public()
+
+
+@app.post("/api/compare")
+def compare(req: JobRequest):
+    """Starts two versions for one posting: ranked by Claude, and by the built-in matcher only.
+    Which one is A and which is B is random, so you judge the resumes, not the label."""
+    if len(req.jd.strip()) < 50:
+        raise HTTPException(400, "The job description looks too short. Paste the full posting.")
+    if not llm.available():
+        raise HTTPException(409, "Claude isn't available, so both versions would be the built-in matcher. "
+                                 "Check the status at the top of the page.")
+    _bank_or_400()
+    base = req.model_dump()
+    jobs = {v: store.start({**base, "variant": v}) for v in ("claude", "matcher")}
+    a, b = random.sample(["claude", "matcher"], 2)
+    return {"a": jobs[a].public(), "b": jobs[b].public()}
+
+
+class PickBody(BaseModel):
+    run_a: str = Field(max_length=80)
+    run_b: str = Field(max_length=80)
+    winner: Literal["a", "b"]
+    reasons: list[Literal["projects", "bullets", "skills", "layout"]] = Field(default_factory=list, max_length=4)
+    source: Literal["compare"] = "compare"
+
+
+@app.post("/api/picks")
+def add_pick(body: PickBody):
+    """Saves which of two resumes you liked better (output/picks.jsonl) with both runs' scorecards
+    and per-bullet score parts."""
+    if body.run_a == body.run_b:
+        raise HTTPException(400, "Pick between two different resumes.")
+    row = picks.append(OUTPUT_DIR, _meta(body.run_a), _meta(body.run_b), body.winner, list(body.reasons), body.source)
+    return {"ok": True, "winner": body.winner, "variants": {"a": row["a"]["variant"], "b": row["b"]["variant"]},
+            "modes": {"a": row["a"]["mode"], "b": row["b"]["mode"]}}
 
 
 @app.get("/api/jobs")
@@ -476,8 +516,86 @@ def regenerate(run_id: str):
     if not m.get("jd"):
         raise HTTPException(400, "This run has no saved job description.")
     req = JobRequest(jd=m["jd"], company=m.get("company", ""), role=m.get("role", ""), url=m.get("url", ""),
-                     force=True, force_text=True)
+                     force=True, force_text=True, variant=m.get("variant") or "claude")
     return create_job(req)
+
+
+def _printed(meta: dict) -> dict[str, str]:
+    """bullet id -> item id for every bullet printed in a run."""
+    return {p["bullet_id"]: p["item_id"] for p in meta.get("provenance") or []}
+
+
+def _swap_options(meta: dict, bank: dict) -> dict[str, list[dict]]:
+    printed = _printed(meta)
+    strict = bank.get("settings", {}).get("strict_lines")
+    fit = {}
+    if strict:
+        try:
+            fit = linefit.bank_fit(bank)
+        except Exception:
+            fit = {}
+    min_fill = bank.get("settings", {}).get("min_last_line_fill", 0.6)
+    group = {b["id"]: b.get("alt_of") or b["id"] for s in ("experiences", "projects")
+             for it in bank.get(s, []) for b in it.get("bullets", [])}
+    printed_group = {group[b]: b for b in printed if b in group}
+    out = {}
+    for section in ("experiences", "projects"):
+        for item in bank.get(section, []):
+            if item["id"] not in printed.values():
+                continue
+            rows = []
+            for b in item.get("bullets", []):
+                if b["id"] in printed or b.get("hidden"):
+                    continue
+                f = fit.get(b["id"])
+                short = bool(f and layout.short_last_line(f, min_fill))
+                # same_as: the printed bullet this is another wording of. It can only replace that one.
+                rows.append({"id": b["id"], "text": bankmod.plain(b["text"]), "alt_of": b.get("alt_of"),
+                             "same_as": printed_group.get(group[b["id"]]),
+                             "short_last_line": short, "blocked": bool(strict and short)})
+            out[item["id"]] = rows
+    return out
+
+
+@app.get("/api/run/{run_id}/swap-options")
+def swap_options(run_id: str):
+    """For each item on the page: its bullets that weren't printed (what you could swap in)."""
+    return _swap_options(_meta(run_id), _bank_or_400())
+
+
+class SwapBody(BaseModel):
+    out: str = Field(max_length=120)
+    in_: str = Field(alias="in", max_length=120)
+
+
+@app.post("/api/run/{run_id}/swap")
+def swap_bullet(run_id: str, body: SwapBody):
+    """Rebuilds this resume with one printed bullet replaced by another bullet of the same item.
+    Logs a pick when it finishes: the new resume is preferred over this one."""
+    m = _meta(run_id)
+    if not m.get("jd"):
+        raise HTTPException(400, "This run has no saved job description.")
+    printed = _printed(m)
+    if body.out not in printed:
+        raise HTTPException(400, "That bullet isn't on this resume.")
+    options = _swap_options(m, _bank_or_400()).get(printed[body.out], [])
+    choice = next((o for o in options if o["id"] == body.in_), None)
+    if not choice:
+        raise HTTPException(409, "That bullet isn't an unused bullet of the same item in your current bank.")
+    if choice["blocked"]:
+        raise HTTPException(409, "That bullet leaves a word or two on its last line, and strict lines is on, "
+                                 "so it's never printed. Fix it in the bank or pick another.")
+    if choice["same_as"] and choice["same_as"] != body.out:
+        raise HTTPException(409, f"That's another wording of {choice['same_as']}, which is already on the page. "
+                                 "Swap that bullet instead.")
+    ov = m.get("overrides") or {}
+    include = (set(ov.get("include") or []) - {body.out}) | {body.in_}
+    exclude = (set(ov.get("exclude") or []) - {body.in_}) | {body.out}
+    req = {"jd": m["jd"], "company": m.get("company", ""), "role": m.get("role", ""), "url": m.get("url", ""),
+           "force_text": True, "source": "swap", "variant": m.get("variant") or "claude",
+           "include": sorted(include), "exclude": sorted(exclude),
+           "swap": {"base_run": run_id, "out": body.out, "in": body.in_}}
+    return store.start(req).public()
 
 
 @app.get("/api/pdf/{run_id}")

@@ -48,6 +48,7 @@ class Result:
     provenance: list[dict]
     stats: dict
     warnings: list[str] = field(default_factory=list)
+    bullet_scores: list[dict] = field(default_factory=list)   # printed bullets: score and its parts
 
 
 RANK_SCHEMA = {
@@ -131,8 +132,11 @@ Bullets:
 
 def run(bank: dict, jd: str, *, title: str = "", company: str = "", force: bool = False,
         rephrase: bool | None = None, job_id: str | None = None, progress=lambda s, m: None,
-        cancelled=lambda: False) -> Result:
+        cancelled=lambda: False, use_llm: bool = True, include=(), exclude=()) -> Result:
+    """use_llm=False skips the Claude re-rank (the "matcher" variant of an A/B comparison).
+    include / exclude are manual swaps: bullet ids forced onto the page / kept off it."""
     t0 = time.time()
+    include, exclude = set(include or ()), set(exclude or ())
     stats = {"llm_requests": 0, "llm_cached": 0, "input_tokens": 0, "output_tokens": 0, "timings": {}}
     warnings: list[str] = []
 
@@ -161,7 +165,7 @@ def run(bank: dict, jd: str, *, title: str = "", company: str = "", force: bool 
 
     # 3. model re-rank of a small pool (ids only)
     mode = "offline"
-    if llm.available():
+    if use_llm and llm.available():
         check_cancel()
         progress("matching", "Ranking your best evidence with Claude…")
         t = time.time()
@@ -182,6 +186,14 @@ def run(bank: dict, jd: str, *, title: str = "", company: str = "", force: bool 
                 raise
             warnings.append(f"Claude wasn't used ({e}). Picked with the built-in matcher instead.")
         tick("rank", t)
+
+    # 3a. manual swaps: excluded bullets never print, included ones are pinned
+    if include or exclude:
+        cands = [c for c in cands if c.bullet_id not in exclude]
+        for c in cands:
+            if c.bullet_id in include and not c.pinned:
+                c.pinned, c.score = True, c.score + 10.0
+        cands.sort(key=lambda c: -c.score)
 
     # 3b. real line counts for every bullet in this template (cached per bank version)
     fit = {}
@@ -276,6 +288,12 @@ def run(bank: dict, jd: str, *, title: str = "", company: str = "", force: bool 
             p.update(lines=f["lines"], last_fill=f["last_fill"], short_last_line=layout.short_last_line(f, min_fill))
 
     card = evaluate.scorecard(job, sel, best.plan, best.measure.to_json(), provenance)
+    missing = sorted(include - set(picked))
+    if missing:
+        warnings.append(f"Couldn't fit {', '.join(missing)} on the page.")
+    # score includes +10 for pinned bullets (bank pins and manual swaps); parts never do
+    scores = [sel.cands[b].to_json() | {"lines": sel.cands[b].lines, "pinned": sel.cands[b].pinned}
+              for b in picked if b in sel.cands]
     stats["seconds"] = round(time.time() - t0, 1)
     stats["compiles"] = lay["compiles"]
     stats["mode"] = mode
@@ -285,7 +303,7 @@ def run(bank: dict, jd: str, *, title: str = "", company: str = "", force: bool 
                             "requirements": [r.model_dump() for r in job.requirements[:20]],
                             "quality": job.quality, "text_hash": job.text_hash},
                   measure=best.measure.to_json(), layout={**lay, "history": lay["history"][-12:]},
-                  scorecard=card, provenance=provenance, stats=stats, warnings=warnings)
+                  scorecard=card, provenance=provenance, stats=stats, warnings=warnings, bullet_scores=scores)
 
 
 def _add_stats(stats: dict, st: dict):

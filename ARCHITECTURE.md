@@ -41,7 +41,15 @@ States: `queued → analyzing → matching → selecting → rendering → optim
 - **Cancel** kills the Claude process and stops between compiles. **Timeout:** 7 minutes.
 - Errors carry a code (`low_confidence`, `usage_limit`, `not_signed_in`, `timeout`, `compile`, `layout`, `bank_invalid`, `interrupted`, `internal`), a plain message, and whether retrying helps.
 - State is written to `output/jobs/<id>.json`; events go to `output/logs/pipeline.jsonl` (no posting text). Jobs cut off by a restart are marked `interrupted`.
-- Each run folder keeps the PDF, `.tex`, and `run.json`. That holds the posting, analysis, plan, provenance, scorecard, layout history, timings, token counts, and bank/template versions.
+- Each run folder keeps the PDF, `.tex`, and `run.json`. That holds the posting, analysis, plan, provenance, scorecard, layout history, timings, token counts, bank/template versions, the variant and swap overrides, and `bullet_scores` (each printed bullet's score and its parts). Two jobs finishing in the same second get `-2`, `-3`… folders.
+- **Variants:** `POST /api/jobs` takes `variant: "claude" | "matcher"` (matcher skips the re-rank call). The variant is part of the idempotency key.
+
+## A/B picks (`server/picks.py`)
+
+- `POST /api/compare` starts both variants for one posting and returns `{a, b}` jobs in random order. It refuses (409) when Claude isn't available, since both would be the matcher.
+- `POST /api/picks {run_a, run_b, winner: "a"|"b", reasons: [projects|bullets|skills|layout]}` appends one line to `output/picks.jsonl`. For each run it saves the variant, the mode actually used (a Claude run that fell back is `offline`), the scorecard, the items and skills line, and the per-bullet score parts from `run.json`. No posting text.
+- **Swaps:** `GET /api/run/{id}/swap-options` lists the unused bullets of each printed item; with `strict_lines`, short-last-line bullets are marked blocked. `POST /api/run/{id}/swap {out, in}` (same item only) starts a job with `exclude`/`include` overrides merged from the base run. The excluded bullet is removed from the candidates and the included one is pinned. This happens after the re-rank, so the Claude prompt and its cache hit are unchanged. When the job finishes it logs a pick automatically (`source: "swap"`, the new run wins, reason `bullets`, plus `applied`: whether the swapped-in bullet actually fit).
+- Bank files are never written by any of this.
 
 ## Security
 
@@ -64,7 +72,7 @@ States: `queued → analyzing → matching → selecting → rendering → optim
 ```
 pip install -r requirements-dev.txt
 python -m playwright install chromium   # once, for the extension tests
-python -m pytest -q                      # 131 tests, ~45 s, no Claude usage
+python -m pytest -q                      # 142 tests, no Claude usage
 python tests/benchmark.py                # per-role timing / coverage / overlap table
 npm install && npm run check:ext         # type-check the extension (tsc --checkJs)
 ```
@@ -73,6 +81,7 @@ npm install && npm run check:ext         # type-check the extension (tsc --check
 - `test_layout`: real compiles; exactly one page for six role types, overflow recovery, special characters, a too-wide heading.
 - `test_pipeline`: mocked Claude (bogus ids, rejected rewordings, usage limit fallback), idempotency, cancel, compile errors, restart recovery.
 - `test_security`: Host/Origin/cross-site/token/pairing/CORS/path traversal/size limits against the real app.
+- `test_compare`: mocked Claude. Covers the matcher variant making no model call, variant in the idempotency key, run folder collisions, `/api/compare` → `/api/picks` (validation, the saved scorecards and score parts), and manual swaps (refusals, the auto-logged pick, swapping back, strict-lines blocking).
 - `test_extension`: the real unpacked extension in Chromium on synthetic Greenhouse, Lever, Workday (late render), LinkedIn (SPA navigation), Simplify, JSON-LD, non-job and malformed pages. It runs end to end through a real download and attach (checks the cover-letter box stays empty and nothing is submitted), and confirms a website's script can't reach the server.
 
 On Linux the tests use XeLaTeX with a Font Awesome stub in place of Tectonic (`tests/support/`); on Windows they use the real `bin/tectonic.exe`.

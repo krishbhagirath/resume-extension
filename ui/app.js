@@ -65,20 +65,29 @@ async function loadHealth() {
 const STATE_LABEL = { queued: "Waiting", analyzing: "Reading the posting", matching: "Matching your experience", selecting: "Choosing content",
   writing: "Rewording", rendering: "Building the PDF", optimizing: "Fitting one page", completed: "Done", failed: "Failed", cancelled: "Cancelled" };
 let currentJob = null;
+let activeJobs = [];   // job ids being followed (two for "Make 2 versions")
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const isDone = (j) => ["completed", "failed", "cancelled"].includes(j.state);
 
 $("#form").addEventListener("submit", (e) => { e.preventDefault(); startJob(); });
+$("#go2").addEventListener("click", () => startCompare());
 $("#jd").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) startJob(); });
 $("#cancel").addEventListener("click", async () => {
-  if (!currentJob) return;
+  if (!activeJobs.length) return;
   $("#cancel").disabled = true;
-  try { await api(`/api/jobs/${currentJob}/cancel`, { method: "POST" }); } catch (e) { $("#err").textContent = e.message; }
+  try { await Promise.all(activeJobs.map((id) => api(`/api/jobs/${id}/cancel`, { method: "POST" }))); }
+  catch (e) { $("#err").textContent = e.message; }
 });
+
+function formBody(extra = {}) {
+  return { jd: $("#jd").value, company: $("#company").value.trim(), role: $("#role").value.trim(),
+           rephrase: $("#rephrase").checked, source: "manual", ...extra };
+}
 
 async function startJob(extra = {}) {
   if (currentJob) return;
   $("#err").textContent = "";
-  const body = { jd: $("#jd").value, company: $("#company").value.trim(), role: $("#role").value.trim(),
-                 rephrase: $("#rephrase").checked, source: "manual", ...extra };
+  const body = formBody(extra);
   if (body.jd.trim().length < 50) { $("#err").textContent = "Paste the full job description first."; return; }
   setBusy(true);
   try {
@@ -91,33 +100,143 @@ async function startJob(extra = {}) {
 
 function setBusy(on) {
   $("#go").disabled = on;
+  $("#go2").disabled = on;
   $("#go").innerHTML = on ? '<span class="spin" aria-hidden="true"></span>Working…' : "Make resume";
   $("#cancel").hidden = !on;
   $("#cancel").disabled = false;
-  if (!on) currentJob = null;
+  if (!on) { currentJob = null; activeJobs = []; }
+}
+
+function jobError(job) {
+  if (job.state === "cancelled") return "Cancelled.";
+  const e = job.error || {};
+  let msg = e.message || "Failed.";
+  if (e.code === "low_confidence") msg += "\nIf this really is the full posting, press Make resume again with Shift held.";
+  if (e.errors?.length) msg += "\n" + e.errors.slice(0, 5).map((x) => `• ${x.path}: ${x.message}`).join("\n");
+  return msg;
+}
+
+async function loadRun(job) {
+  const run = await api(`/api/run/${encodeURIComponent(job.result.run_id)}`);
+  if (!$("#company").value) $("#company").value = run.company || "";
+  if (!$("#role").value) $("#role").value = run.role || "";
+  return run;
 }
 
 async function follow(job) {
   currentJob = job.id;
+  activeJobs = [job.id];
   $("#progress").hidden = false;
   for (;;) {
     renderSteps(job);
-    if (["completed", "failed", "cancelled"].includes(job.state)) break;
-    await new Promise((r) => setTimeout(r, 700));
+    if (isDone(job)) break;
+    await sleep(700);
     job = await api(`/api/jobs/${job.id}`);
   }
-  if (job.state === "completed") {
-    const run = await api(`/api/run/${encodeURIComponent(job.result.run_id)}`);
-    if (!$("#company").value) $("#company").value = run.company || "";
-    if (!$("#role").value) $("#role").value = run.role || "";
-    showRun(run);
-  } else if (job.state === "failed") {
-    const e = job.error || {};
-    let msg = e.message || "Failed.";
-    if (e.code === "low_confidence") msg += "\nIf this really is the full posting, press Make resume again with Shift held.";
-    if (e.errors?.length) msg += "\n" + e.errors.slice(0, 5).map((x) => `• ${x.path}: ${x.message}`).join("\n");
-    $("#err").textContent = msg;
-  }
+  if (job.state === "completed") showRun(await loadRun(job));
+  else if (job.state === "failed") $("#err").textContent = jobError(job);
+}
+
+// ---------------------------------------------------------------- A/B: two versions, you pick
+const REASONS = [["projects", "Projects"], ["bullets", "Bullets"], ["skills", "Skills line"], ["layout", "Layout"]];
+let compare = null;   // {a, b, picked} for the last "Make 2 versions"
+
+async function startCompare() {
+  if (currentJob) return;
+  $("#err").textContent = "";
+  const body = formBody();
+  if (body.jd.trim().length < 50) { $("#err").textContent = "Paste the full job description first."; return; }
+  setBusy(true);
+  currentJob = "compare";
+  try {
+    let { a, b } = await api("/api/compare", { method: "POST", body: JSON.stringify(body) });
+    activeJobs = [a.id, b.id];
+    $("#progress").hidden = false;
+    for (;;) {
+      renderPair(a, b);
+      if (isDone(a) && isDone(b)) break;
+      await sleep(700);
+      [a, b] = await Promise.all([a, b].map((j) => (isDone(j) ? j : api(`/api/jobs/${j.id}`))));
+    }
+    const errs = [["A", a], ["B", b]].filter(([, j]) => j.state !== "completed").map(([k, j]) => `Version ${k}: ${jobError(j)}`);
+    if (!errs.length) {
+      const [ra, rb] = await Promise.all([loadRun(a), loadRun(b)]);
+      compare = { a: ra, b: rb, picked: null };
+      showCompare();
+    } else {
+      $("#err").textContent = errs.join("\n");
+      const ok = [a, b].find((j) => j.state === "completed");
+      if (ok) showRun(await loadRun(ok));
+    }
+  } catch (e) {
+    $("#err").textContent = e.message;
+  } finally { setBusy(false); }
+}
+
+function renderPair(a, b) {
+  $("#steps").innerHTML = [["A", a], ["B", b]].map(([k, j]) => {
+    const icon = isDone(j) ? (j.state === "completed" ? "✓" : "✕") : '<span class="spin"></span>';
+    const t = j.progress?.length ? j.progress[j.progress.length - 1].t : 0;
+    return `<li class="${isDone(j) ? "done" : "now"}"><span class="ic">${icon}</span><b>Version ${k}</b>&nbsp;${esc(j.message)}<span class="hint" style="margin-left:auto">${t}s</span></li>`;
+  }).join("");
+}
+
+function variantLabel(run) {
+  if (run.variant === "matcher") return "Built-in matcher";
+  return run.mode === "offline" ? "Claude (not used: fell back to the matcher)" : "Ranked by Claude";
+}
+
+function showCompare() {
+  const { a, b, picked } = compare;
+  const ids = (r) => (r.provenance || []).map((p) => p.bullet_id).sort().join(",");
+  const same = ids(a) === ids(b) && JSON.stringify(a.selection?.skills) === JSON.stringify(b.selection?.skills);
+  const side = (k, r) => {
+    const sc = r.scorecard || {};
+    const v = r.validation || {};
+    const pdf = `/api/pdf/${encodeURIComponent(r.id)}`;
+    return `<div class="side${picked?.winner === k.toLowerCase() ? " won" : ""}">
+      <h3>Version ${k}
+        <span class="chip ${v.one_page ? "ok" : "bad"}">${v.one_page ? "1 page" : (v.pages || "?") + " pages"}</span>
+        <span class="chip" title="Share of the job's needs your bank can show that this version shows">${pct(sc.supported_coverage)} coverage</span>
+        <span class="chip">${sc.bullets ?? "?"} bullets · ${pct(sc.quantified)} measured</span>
+        ${picked ? `<span class="chip ok">${esc(variantLabel(r))}</span>` : ""}</h3>
+      ${(r.warnings || []).map((w) => `<p class="hint" style="color:var(--warn)">${esc(w)}</p>`).join("")}
+      <iframe class="pdf" title="Version ${k} preview" src="${pdf}#view=FitH"></iframe>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <a class="quiet" href="${pdf}" target="_blank" rel="noopener">Open</a>
+        <a class="quiet" href="${pdf}?download=true" download="${esc(r.filename)}">Download</a>
+        <button class="quiet" type="button" data-details="${k.toLowerCase()}">Details and swaps</button>
+      </div></div>`;
+  };
+  $("#proof").innerHTML = `
+    <div class="proof-bar"><h2>Which version is better?</h2>
+      <span class="hint">${picked ? "Pick saved." : "One was ranked by Claude, one by the built-in matcher. You'll see which after you pick."}</span></div>
+    ${same ? `<p class="hint" style="color:var(--warn)">Both versions printed the same bullets and skills, so there's little to choose between.</p>` : ""}
+    <div class="card pickbar">
+      <span class="why" role="group" aria-label="What made the difference">What made the difference?
+        ${REASONS.map(([id, label]) => `<button type="button" data-why="${id}" aria-pressed="${!!picked?.reasons.includes(id)}" ${picked ? "disabled" : ""}>${label}</button>`).join("")}</span>
+      <span class="go">
+        <button class="primary" type="button" data-win="a" ${picked ? "disabled" : ""}>A is better</button>
+        <button class="primary" type="button" data-win="b" ${picked ? "disabled" : ""}>B is better</button></span>
+    </div>
+    <p class="error" id="pickErr" role="alert"></p>
+    <div class="ab">${side("A", a)}${side("B", b)}</div>`;
+  $$("#proof [data-why]").forEach((btn) => btn.addEventListener("click", () =>
+    btn.setAttribute("aria-pressed", btn.getAttribute("aria-pressed") !== "true")));
+  $$("#proof [data-win]").forEach((btn) => btn.addEventListener("click", async () => {
+    const reasons = $$('#proof [data-why][aria-pressed="true"]').map((x) => x.dataset.why);
+    $$("#proof [data-win]").forEach((x) => (x.disabled = true));
+    try {
+      await api("/api/picks", { method: "POST", body: JSON.stringify({ run_a: a.id, run_b: b.id, winner: btn.dataset.win, reasons }) });
+      compare.picked = { winner: btn.dataset.win, reasons };
+      showCompare();
+    } catch (e) {
+      $("#pickErr").textContent = e.message;
+      $$("#proof [data-win]").forEach((x) => (x.disabled = false));
+    }
+  }));
+  $$("#proof [data-details]").forEach((btn) => btn.addEventListener("click", () =>
+    showRun(compare[btn.dataset.details], { back: true })));
 }
 // Shift+click = go ahead even if the posting looks incomplete
 $("#go").addEventListener("click", (e) => { if (e.shiftKey) { e.preventDefault(); startJob({ force_text: true }); } });
@@ -136,7 +255,7 @@ function renderSteps(job) {
   $("#steps").innerHTML = rows.join("") || `<li class="now"><span class="ic"><span class="spin"></span></span>${esc(job.message)}</li>`;
 }
 
-function showRun(run) {
+function showRun(run, opts = {}) {
   const sc = run.scorecard || {};
   const st = run.stats || {};
   const v = run.validation || {};
@@ -149,6 +268,7 @@ function showRun(run) {
       <span class="chip ${v.one_page ? "ok" : "bad"}">${v.one_page ? "1 page" : (v.pages || "?") + " pages"}</span>
       <span class="chip">${run.mode === "offline" ? "Built-in matcher" : "Ranked by Claude"}</span>
       <div class="actions">
+        ${opts.back && compare ? '<button class="quiet" type="button" id="backAB">← Both versions</button>' : ""}
         <a class="quiet" href="${pdf}" target="_blank" rel="noopener">Open</a>
         <a class="quiet" href="/api/overleaf/${encodeURIComponent(run.id)}" target="_blank" rel="noopener">Edit in Overleaf</a>
         <button class="quiet" type="button" id="regen">Regenerate</button>
@@ -172,13 +292,50 @@ function showRun(run) {
       ${(sc.unsupported || []).map((s) => `<span class="chip bad" title="Your bank has no evidence for this, so it wasn't added">${esc(s)} (not in bank)</span>`).join("")}
     </div>
     ${provenanceHtml(run)}`;
+  $("#backAB")?.addEventListener("click", () => showCompare());
+  $("#proof .prov").addEventListener("click", (e) => {
+    const out = e.target.dataset?.swap;
+    if (out) openSwap(run, out, e.target.closest("li"));
+  });
   $("#regen").addEventListener("click", async () => {
     $("#jd").value = $("#jd").value || run.jd || "";
     if (!$("#jd").value) {
       setBusy(true);
       try { await follow(await api(`/api/run/${encodeURIComponent(run.id)}/regenerate`, { method: "POST" })); }
       catch (e) { $("#err").textContent = e.message; } finally { setBusy(false); }
-    } else startJob({ force: true });
+    } else startJob({ force: true, variant: run.variant || "claude" });
+  });
+}
+
+// Manual swap: rebuild with one printed bullet replaced. The server logs it as a pick (new beats old).
+async function openSwap(run, out, li) {
+  const open = li.querySelector(".swapbox");
+  if (open) { open.remove(); return; }
+  const box = document.createElement("div");
+  box.className = "swapbox";
+  box.innerHTML = '<span class="hint"><span class="spin"></span> Loading…</span>';
+  li.appendChild(box);
+  let options;
+  try { options = await api(`/api/run/${encodeURIComponent(run.id)}/swap-options`); }
+  catch (e) { box.innerHTML = `<span class="error">${esc(e.message)}</span>`; return; }
+  const item = (run.provenance || []).find((p) => p.bullet_id === out)?.item_id;
+  // another wording of a different printed bullet would just reword that one: only offer it on that bullet
+  const rows = (options[item] || []).filter((r) => !r.same_as || r.same_as === out);
+  if (!rows.length) { box.innerHTML = '<span class="hint">No other bullets in this item to swap in.</span>'; return; }
+  box.innerHTML = `<select aria-label="Bullet to use instead">${rows.map((r) =>
+      `<option value="${esc(r.id)}" ${r.blocked ? "disabled" : ""}>${r.same_as ? "Other wording: " : ""}${esc(r.text.slice(0, 140))}${r.blocked ? " (short last line: never printed)" : ""}</option>`).join("")}</select>
+    <button class="quiet" type="button">Use this</button>
+    <span class="hint">Rebuilds the resume and saves your choice as a pick.</span>`;
+  const sel = box.querySelector("select");
+  const firstOk = rows.find((r) => !r.blocked);
+  if (firstOk) sel.value = firstOk.id;
+  box.querySelector("button").addEventListener("click", async () => {
+    if (currentJob || !sel.value || sel.selectedOptions[0]?.disabled) return;
+    $("#err").textContent = "";
+    setBusy(true);
+    try {
+      await follow(await api(`/api/run/${encodeURIComponent(run.id)}/swap`, { method: "POST", body: JSON.stringify({ out, in: sel.value }) }));
+    } catch (e) { $("#err").textContent = e.message; } finally { setBusy(false); }
   });
 }
 
@@ -189,7 +346,7 @@ function provenanceHtml(run) {
   const titles = Object.fromEntries((Bank.data ? [...Bank.data.experiences, ...Bank.data.projects] : []).map((i) => [i.id, i.title + (i.org ? ", " + i.org : "")]));
   const items = [...byItem.entries()].map(([id, rows]) => `
     <div class="item"><h4>${esc(titles[id] || id)}</h4><ul>${rows.map((p) => `
-      <li>${esc(p.rephrased ? p.text.replace(/\*\*/g, "") : p.source)}<span class="tag">${p.rephrased ? "reworded · checked" : "your wording"} · ${esc(p.bullet_id)}${p.lines ? ` · ${p.lines} line${p.lines > 1 ? "s" : ""}` : ""}</span>${p.short_last_line ? `<span class="chip warn">last line ${Math.round(p.last_fill * 100)}% full</span>` : ""}
+      <li>${esc(p.rephrased ? p.text.replace(/\*\*/g, "") : p.source)}<button class="ghost swap" type="button" data-swap="${esc(p.bullet_id)}" title="Replace this with another bullet from the same item">Swap</button><span class="tag">${p.rephrased ? "reworded · checked" : "your wording"} · ${esc(p.bullet_id)}${p.lines ? ` · ${p.lines} line${p.lines > 1 ? "s" : ""}` : ""}</span>${p.short_last_line ? `<span class="chip warn">last line ${Math.round(p.last_fill * 100)}% full</span>` : ""}
       ${p.rephrased ? `<div class="rej">Original: ${esc(p.source)}</div>` : ""}
       ${p.rejected ? `<div class="rej">Rejected rewording: “${esc(p.rejected_text)}” (${esc((p.reasons || []).join("; "))})</div>` : ""}</li>`).join("")}</ul></div>`).join("");
   const req = (run.analysis?.requirements || []).slice(0, 12).map((r) => `<span class="chip">${esc(r.skill)} · ${esc(r.section)}</span>`).join("");

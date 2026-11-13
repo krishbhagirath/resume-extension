@@ -6,8 +6,10 @@ States: queued -> analyzing -> matching -> selecting -> writing -> rendering -> 
 * Jobs run in a background thread on the server, so they don't depend on the Chrome
   extension's service worker staying alive. The extension just polls GET /api/jobs/{id}.
 * Each state change is written to output/jobs/<id>.json and appended to output/logs/pipeline.jsonl.
-* Idempotent: the same posting + bank + template + settings returns the running job, or the
-  finished result (unless force=True). Duplicate clicks can't start duplicate work.
+* Idempotent: the same posting + bank + template + settings + variant (+ swaps) returns the running
+  job, or the finished result (unless force=True). Duplicate clicks can't start duplicate work.
+* Variants: "claude" (default) re-ranks with Claude; "matcher" skips that call (A/B comparisons).
+* A finished manual swap (request["swap"]) logs a pick: the new run beats the one it came from.
 * Jobs left unfinished by a server restart are marked failed (retryable) on startup.
 * Errors carry a code, a plain message, and whether retrying could help.
 """
@@ -28,8 +30,11 @@ from pathlib import Path
 import bank as bankmod
 import layout
 import llm
+import picks
 import render
 import tailor
+
+VARIANTS = ("claude", "matcher")
 
 TERMINAL = {"completed", "failed", "cancelled"}
 TIMEOUT_S = 420
@@ -108,9 +113,14 @@ class JobStore:
         bank_dict = bankmod.load_dict(self.bank_path)
         tpl = render.template_info(bank_dict)
         settings = bank_dict.get("settings", {})
+        req = {**req, "variant": req.get("variant") or "claude",
+               "include": sorted(set(req.get("include") or [])), "exclude": sorted(set(req.get("exclude") or []))}
+        if req["variant"] not in VARIANTS:
+            raise ValueError(f"variant must be one of {VARIANTS}")
         key_src = json.dumps([re.sub(r"\s+", " ", req["jd"]).strip(), req.get("company", ""), req.get("role", ""),
                               bankmod.version_hash(bank_dict), tpl["version"], llm.engine(), llm.model_name(),
-                              settings.get("rephrase"), req.get("rephrase")], sort_keys=True)
+                              settings.get("rephrase"), req.get("rephrase"), req["variant"], req["include"],
+                              req["exclude"]], sort_keys=True)
         key = hashlib.sha256(key_src.encode()).hexdigest()[:20]
         with self.lock:
             for j in self.jobs.values():
@@ -142,22 +152,23 @@ class JobStore:
         cancelled = lambda: job.id in self.cancel_flags or time.time() - started > TIMEOUT_S
         try:
             req = job.request
+            variant = req.get("variant") or "claude"
             res = tailor.run(bank_dict, req["jd"], title=req.get("role", ""), company=req.get("company", ""),
                              force=req.get("force_text", False), rephrase=req.get("rephrase"), job_id=job.id,
-                             progress=lambda s, m: self.set_state(job, s, m), cancelled=cancelled)
+                             progress=lambda s, m: self.set_state(job, s, m), cancelled=cancelled,
+                             use_llm=variant != "matcher", include=req.get("include"), exclude=req.get("exclude"))
             if cancelled():
                 raise layout.LayoutError("Cancelled.")
             company = (req.get("company") or res.company or "").strip()
             role = (req.get("role") or res.role or "").strip()
             filename = pdf_filename(bank_dict, company, role)
-            run_id = datetime.now().strftime("%Y%m%d-%H%M%S") + "_" + (clean_name(company) or "Company")
-            run_dir = self.out / run_id
-            run_dir.mkdir(parents=True, exist_ok=True)
+            run_id, run_dir = self._new_run_dir(clean_name(company) or "Company")
             (run_dir / filename).write_bytes(res.pdf)
             (run_dir / filename).with_suffix(".tex").write_text(res.tex, encoding="utf-8")
             meta = {
                 "id": run_id, "job_id": job.id, "filename": filename, "company": company, "role": role,
-                "url": req.get("url", ""), "mode": res.stats.get("mode"),
+                "url": req.get("url", ""), "mode": res.stats.get("mode"), "variant": variant,
+                "overrides": {"include": req.get("include") or [], "exclude": req.get("exclude") or []},
                 "created": datetime.now().isoformat(timespec="seconds"),
                 "bank_version": bankmod.version_hash(bank_dict), "template": tpl["name"],
                 "template_version": tpl["version"], "selection": {**res.plan, "template": tpl["name"],
@@ -165,11 +176,14 @@ class JobStore:
                 "validation": {"one_page": res.measure.get("pages") == 1, **res.measure},
                 "layout": res.layout, "scorecard": res.scorecard, "provenance": res.provenance,
                 "analysis": res.analysis, "stats": res.stats, "warnings": res.warnings, "jd": req["jd"],
+                "bullet_scores": res.bullet_scores,
             }
             (run_dir / "run.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
             job.result = {"run_id": run_id, "filename": filename, "company": company, "role": role,
                           "pdf_url": f"/api/pdf/{run_id}", "scorecard": res.scorecard, "stats": res.stats,
-                          "warnings": res.warnings}
+                          "warnings": res.warnings, "variant": variant}
+            if req.get("swap"):
+                self._log_swap(req["swap"], meta)
             self.set_state(job, "completed", "Resume ready.")
             self._log(job, "completed", seconds=round(time.time() - started, 1), compiles=res.stats.get("compiles"),
                       llm_requests=res.stats.get("llm_requests"), tokens=res.stats.get("input_tokens", 0)
@@ -198,6 +212,31 @@ class JobStore:
             self._fail(job, "internal", f"Something went wrong: {e}", True)
         finally:
             self.cancel_flags.discard(job.id)
+
+    def _new_run_dir(self, company: str) -> tuple[str, Path]:
+        """output/<time>_<Company>, with -2, -3… when two jobs (A/B versions) finish in the same second."""
+        base = datetime.now().strftime("%Y%m%d-%H%M%S") + "_" + company
+        run_id, n = base, 2
+        while True:
+            try:
+                (self.out / run_id).mkdir(parents=True)
+                return run_id, self.out / run_id
+            except FileExistsError:
+                run_id, n = f"{base}-{n}", n + 1
+
+    def _log_swap(self, swap: dict, new_meta: dict):
+        """A manual swap is a pick: you preferred the new bullet, so the new run wins over its base."""
+        base = str(swap.get("base_run", ""))
+        f = self.out / base / "run.json"
+        if not re.fullmatch(r"[\w.-]{1,80}", base) or not f.exists():
+            return
+        try:
+            old = json.loads(f.read_text(encoding="utf-8"))
+            printed = {b["id"] for b in new_meta.get("bullet_scores", [])}
+            picks.append(self.out, old, new_meta, "b", ["bullets"], "swap",
+                         swap={"out": swap.get("out"), "in": swap.get("in"), "applied": swap.get("in") in printed})
+        except Exception:
+            self._log(Job(id="-", key="-"), "pick_log_failed", trace=traceback.format_exc()[-1500:])
 
     def _fail(self, job: Job, code: str, message: str, retryable: bool, extra: dict | None = None):
         job.error = {"code": code, "message": message, "retryable": retryable, **(extra or {})}

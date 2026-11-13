@@ -27,6 +27,12 @@ Updating: double-click `update.bat` (stops the server, installs anything new, te
 3. Check company and role. The panel tells you how much text it found and whether it looks like a complete posting. Click **Make resume**. You'll see each step; you can cancel.
 4. The PDF downloads once it passes the one-page check. On an application form, click **Attach to this application**, then check the form before you submit.
 
+### Two versions, and teaching it what you like
+
+- **Make 2 versions** (Tailor tab) builds the same posting twice: one ranked by Claude, one by the built-in matcher only. Which is A and which is B is random. The two PDFs sit side by side. Tick what made the difference (projects, bullets, skills line, layout), click **A is better** or **B is better**, and it shows which was which.
+- **Swap** next to any printed bullet ("What's on the page") replaces it with another bullet from the same item and rebuilds the resume (still checked to one page). Swaps carry over if you swap again. With strict lines on, bullets with a short last line can't be swapped in.
+- Every pick and every swap is saved to `output/picks.jsonl` with both resumes' scorecards and each printed bullet's score parts, ready for learning ranking weights from your choices later. A swap counts as "the new version is better, because of bullets". Posting text isn't copied into it.
+
 If the button can't find the posting: highlight the job text and click again, or paste it into the box. Apply pages that hide the posting (Lever, Workday) use the posting you viewed earlier in the same tab.
 
 ## The web page (http://127.0.0.1:8765)

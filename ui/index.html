@@ -79,6 +79,22 @@ textarea { resize: vertical; }
 .prov .tag { font-size: 11px; color: var(--slate); margin-left: 6px; }
 .prov .rej { color: var(--slate); font-size: 12px; }
 details summary { cursor: pointer; color: var(--slate); font-size: 13px; }
+.prov .swap { font-size: 12px; padding: 0 6px; margin-left: 4px; }
+.swapbox { display: flex; gap: 6px; align-items: center; margin: 4px 0 6px; flex-wrap: wrap; }
+.swapbox select { max-width: 70ch; font-size: 12.5px; padding: 4px 7px; }
+
+/* A/B */
+.ab { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 1100px) { .ab { grid-template-columns: 1fr; } }
+.ab .side { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.ab .side h3 { margin: 0; font-size: 15px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.ab .pdf { height: 72vh; }
+.ab .side.won { outline: 2px solid var(--ok); outline-offset: 4px; border-radius: 6px; }
+.pickbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 12px 0; padding: 12px; }
+.pickbar .why { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
+.pickbar .why button { border: 1px solid var(--rule); background: var(--sheet); border-radius: 99px; padding: 2px 10px; font-size: 12.5px; cursor: pointer; color: var(--slate); }
+.pickbar .why button[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.pickbar .go { margin-left: auto; display: flex; gap: 6px; }
 
 /* Bank editor */
 .bankbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; position: sticky; top: 56px; background: var(--paper); padding: 8px 0; z-index: 4; }
@@ -151,6 +167,7 @@ pre.diag { font: 12px/1.45 var(--mono); background: var(--soft); padding: 10px; 
         <label class="inline"><input type="checkbox" id="rephrase"> Allow light rewording (a few bullets, fact- and line-checked)</label>
         <div style="display:flex;gap:8px">
           <button class="primary" id="go" type="submit">Make resume</button>
+          <button class="quiet" id="go2" type="button" title="One ranked by Claude, one by the built-in matcher, in random order. Pick the better one.">Make 2 versions</button>
           <button class="quiet" id="cancel" type="button" hidden>Cancel</button>
         </div>
         <p class="hint">Ctrl + Enter also works. Only accomplishments from your bank are used.</p>

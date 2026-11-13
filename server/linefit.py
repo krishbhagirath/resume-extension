@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from pathlib import Path
 
 import bank as bankmod
@@ -18,6 +19,7 @@ import layout
 import render
 
 CACHE = Path(__file__).resolve().parent.parent / "output" / "cache" / "lines"
+_lock = threading.Lock()   # two jobs at once (A/B versions) measure the bank once, never read a half-written file
 
 
 def _all_plan(bank: dict) -> dict:
@@ -41,6 +43,11 @@ def printed_texts(bank: dict, ids=None, texts: dict | None = None) -> dict[str, 
 
 def bank_fit(bank: dict) -> dict[str, dict]:
     """{bullet_id: {lines, last_fill, first_fill, chars_per_line}} for every bullet in the bank."""
+    with _lock:
+        return _bank_fit(bank)
+
+
+def _bank_fit(bank: dict) -> dict[str, dict]:
     tpl = render.template_info(bank)
     key = hashlib.sha256(json.dumps([bankmod.version_hash(bank), tpl["version"]]).encode()).hexdigest()[:20]
     f = CACHE / f"{key}.json"
@@ -63,7 +70,9 @@ def bank_fit(bank: dict) -> dict[str, dict]:
                 i = j + 1
                 break
     CACHE.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps(out), encoding="utf-8")
+    tmp = f.with_suffix(f".{threading.get_ident()}.tmp")
+    tmp.write_text(json.dumps(out), encoding="utf-8")
+    tmp.replace(f)
     return out
 
 

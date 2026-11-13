@@ -1,0 +1,235 @@
+"""A/B comparison ("Make 2 versions"), picks, and manual bullet swaps. Mocked model: no Claude usage."""
+import importlib
+import json
+import sys
+import time
+
+import pytest
+from fastapi.testclient import TestClient
+
+import bank as bankmod
+import llm
+import pipeline
+import tailor
+from conftest import JDS, needs_tex
+from test_pipeline import FakeModel, wait
+
+PARTS = {"coverage", "keywords", "role", "evidence", "recency", "llm"}
+
+
+@pytest.fixture
+def fake(monkeypatch):
+    def install(**kw):
+        m = FakeModel(**kw)
+        m.cancelled = set()
+        monkeypatch.setattr(llm, "available", lambda: True)
+        monkeypatch.setattr(llm, "engine", lambda: "claude-code")
+        monkeypatch.setattr(llm, "complete_json", m)
+        monkeypatch.setattr(llm, "cancel", lambda jid: m.cancelled.add(jid))
+        return m
+    return install
+
+
+@pytest.fixture
+def client(tmp_path, monkeypatch, small_bank):
+    """The real app on a temp copy of a small synthetic bank (your bank files are never touched)."""
+    data = tmp_path / "data"
+    data.mkdir()
+    bankmod.save(data / "experiences.yaml", small_bank)
+    monkeypatch.setenv("BANK_PATH", str(data / "experiences.yaml"))
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "output"))
+    monkeypatch.setenv("PORT", "8765")
+    sys.modules.pop("app", None)
+    app = importlib.import_module("app")
+    c = TestClient(app.app, base_url="http://127.0.0.1:8765", headers={"X-RT-Token": app.TOKEN})
+    c.mod = app
+    c.out = tmp_path / "output"
+    return c
+
+
+def picks_rows(out):
+    f = out / "picks.jsonl"
+    return [json.loads(x) for x in f.read_text(encoding="utf-8").splitlines()] if f.exists() else []
+
+
+def finish(c, job):
+    j = wait(c.mod.store, job["id"])
+    assert j.state == "completed", j.error
+    return c.get(f"/api/run/{j.result['run_id']}").json()
+
+
+# ---------------------------------------------------------------- tailor / pipeline
+
+@needs_tex
+def test_matcher_variant_skips_the_model(fake, small_bank):
+    m = fake()
+    res = tailor.run(small_bank, JDS["backend"], use_llm=False)
+    assert m.calls == [] and res.stats["mode"] == "offline"
+    assert res.bullet_scores and all(set(b["parts"]) == PARTS and b["parts"]["llm"] == 0 for b in res.bullet_scores)
+    printed = {p["bullet_id"] for p in res.provenance}
+    assert {b["id"] for b in res.bullet_scores} == printed
+
+
+@needs_tex
+def test_include_and_exclude(small_bank):
+    small_bank["settings"]["max_bullets_per_item"] = 2   # so some bullets are left over
+    base = tailor.run(small_bank, JDS["backend"])
+    printed = [p["bullet_id"] for p in base.provenance]
+    unused = [b["id"] for s in ("experiences", "projects") for it in small_bank[s] if not it.get("hidden")
+              for b in it["bullets"] if b["id"] not in printed and not b.get("alt_of")]
+    assert unused, "the small bank should have a bullet left over"
+    out, inc = printed[-1], unused[0]
+    res = tailor.run(small_bank, JDS["backend"], exclude={out}, include={inc})
+    now = {p["bullet_id"] for p in res.provenance}
+    assert out not in now and inc in now
+    assert res.measure["pages"] == 1
+
+
+@needs_tex
+def test_variant_is_part_of_the_idempotency_key(fake, tmp_path, small_bank):
+    m = fake()
+    bank = tmp_path / "data" / "experiences.yaml"
+    bank.parent.mkdir()
+    bankmod.save(bank, small_bank)
+    store = pipeline.JobStore(tmp_path / "output", bank)
+    req = {"jd": JDS["backend"], "company": "Example", "role": "Backend Intern"}
+    a = store.start({**req, "variant": "claude"})
+    b = store.start({**req, "variant": "matcher"})
+    assert a.id != b.id and a.key != b.key
+    assert store.start({**req, "variant": "matcher"}).id == b.id      # duplicate click: same job
+    assert store.start(dict(req)).id == a.id                          # no variant = claude
+    a, b = wait(store, a.id), wait(store, b.id)
+    assert a.state == b.state == "completed"
+    assert len(m.calls) == 1                                          # only the claude version asked the model
+    ra = json.loads((store.out / a.result["run_id"] / "run.json").read_text())
+    rb = json.loads((store.out / b.result["run_id"] / "run.json").read_text())
+    assert a.result["run_id"] != b.result["run_id"]                   # same company, same second: separate folders
+    assert (ra["variant"], ra["mode"]) == ("claude", "claude-code")
+    assert (rb["variant"], rb["mode"]) == ("matcher", "offline")
+    assert any(x["parts"]["llm"] > 0 for x in ra["bullet_scores"])
+    assert all(x["parts"]["llm"] == 0 for x in rb["bullet_scores"])
+    with pytest.raises(ValueError):
+        store.start({**req, "variant": "gpt"})
+
+
+def test_run_folders_never_collide(tmp_path):
+    from conftest import BANK_FILE
+    store = pipeline.JobStore(tmp_path, BANK_FILE)
+    ids = {store._new_run_dir("Acme")[0] for _ in range(3)}
+    assert len(ids) == 3 and all((tmp_path / i).is_dir() for i in ids)
+
+
+# ---------------------------------------------------------------- API
+
+def test_compare_needs_claude(client):
+    r = client.post("/api/compare", json={"jd": JDS["backend"]})
+    assert r.status_code == 409 and "Claude" in r.json()["detail"]
+
+
+def test_compare_and_picks_need_the_token(client):
+    no_token = {"X-RT-Token": ""}
+    assert client.post("/api/compare", json={"jd": JDS["backend"]}, headers=no_token).status_code == 401
+    assert client.post("/api/picks", json={"run_a": "x", "run_b": "y", "winner": "a"}, headers=no_token).status_code == 401
+
+
+@needs_tex
+def test_compare_then_pick(fake, client):
+    m = fake()
+    r = client.post("/api/compare", json={"jd": JDS["backend"], "company": "Example", "role": "Backend Intern"})
+    assert r.status_code == 200, r.text
+    ja, jb = r.json()["a"], r.json()["b"]
+    assert {ja["request"]["variant"], jb["request"]["variant"]} == {"claude", "matcher"}
+    assert "jd" not in ja["request"]
+    ra, rb = finish(client, ja), finish(client, jb)
+    assert len(m.calls) == 1
+
+    bad = client.post("/api/picks", json={"run_a": ra["id"], "run_b": rb["id"], "winner": "a", "reasons": ["vibes"]})
+    assert bad.status_code == 422
+    assert client.post("/api/picks", json={"run_a": ra["id"], "run_b": ra["id"], "winner": "a"}).status_code == 400
+    assert client.post("/api/picks", json={"run_a": ra["id"], "run_b": "../etc", "winner": "a"}).status_code == 404
+    assert client.post("/api/picks", json={"run_a": ra["id"], "run_b": rb["id"], "winner": "c"}).status_code == 422
+    assert picks_rows(client.out) == []
+
+    r = client.post("/api/picks", json={"run_a": ra["id"], "run_b": rb["id"], "winner": "b",
+                                        "reasons": ["bullets", "skills", "bullets"]})
+    assert r.status_code == 200, r.text
+    assert r.json()["variants"] == {"a": ra["variant"], "b": rb["variant"]}
+    [row] = picks_rows(client.out)
+    assert row["source"] == "compare" and row["winner"] == "b" and row["reasons"] == ["bullets", "skills"]
+    assert row["company"] == "Example" and JDS["backend"][:40] not in json.dumps(row)   # no posting text
+    for side, run in (("a", ra), ("b", rb)):
+        s = row[side]
+        assert s["run_id"] == run["id"] and s["variant"] == run["variant"]
+        assert s["scorecard"]["supported_coverage"] == run["scorecard"]["supported_coverage"]
+        assert {b["id"] for b in s["bullets"]} == {p["bullet_id"] for p in run["provenance"]}
+        assert all(set(b["parts"]) == PARTS for b in s["bullets"])
+
+
+@needs_tex
+def test_jobs_endpoint_accepts_variant(client):
+    assert client.post("/api/jobs", json={"jd": JDS["backend"], "variant": "nope"}).status_code == 422
+    run = finish(client, client.post("/api/jobs", json={"jd": JDS["backend"], "company": "X", "role": "Y",
+                                                         "variant": "matcher"}).json())
+    assert run["variant"] == "matcher" and run["mode"] == "offline"
+
+
+@needs_tex
+def test_manual_swap_rebuilds_and_logs_a_pick(client):
+    base = finish(client, client.post("/api/jobs", json={"jd": JDS["backend"], "company": "X", "role": "Y"}).json())
+    printed = {p["bullet_id"]: p["item_id"] for p in base["provenance"]}
+    opts = client.get(f"/api/run/{base['id']}/swap-options").json()
+    assert set(opts) == set(printed.values())
+    assert all(o["id"] not in printed for rows in opts.values() for o in rows)
+    pairs = [(b, i, o["id"]) for b, i in printed.items() for o in opts.get(i, [])
+             if not o["blocked"] and o["same_as"] in (None, b)]
+    out, item, new_in = pairs[0]
+    other_item = next((o["id"] for i, rows in opts.items() if i != item for o in rows), "fw-power")
+    # another wording of a printed bullet can only replace that bullet, not a different one
+    clash = [(b, o["id"]) for b, i in printed.items() for o in opts.get(i, []) if o["same_as"] not in (None, b)]
+    assert clash, "small bank: acme-api-alt is another wording of a printed bullet"
+    r = client.post(f"/api/run/{base['id']}/swap", json={"out": clash[0][0], "in": clash[0][1]})
+    assert r.status_code == 409 and "another wording" in r.json()["detail"]
+
+    # refused: bullet not on the page, bullet from another item, unknown bullet
+    assert client.post(f"/api/run/{base['id']}/swap", json={"out": "web-1", "in": new_in}).status_code == 400
+    assert client.post(f"/api/run/{base['id']}/swap", json={"out": out, "in": other_item}).status_code == 409
+    assert client.post(f"/api/run/{base['id']}/swap", json={"out": out, "in": "nope"}).status_code == 409
+
+    r = client.post(f"/api/run/{base['id']}/swap", json={"out": out, "in": new_in})
+    assert r.status_code == 200, r.text
+    new = finish(client, r.json())
+    now = {p["bullet_id"] for p in new["provenance"]}
+    assert out not in now and new_in in now and new["validation"]["one_page"]
+    assert new["overrides"] == {"include": [new_in], "exclude": [out]}
+    [row] = picks_rows(client.out)
+    assert row["source"] == "swap" and row["winner"] == "b" and row["reasons"] == ["bullets"]
+    assert row["a"]["run_id"] == base["id"] and row["b"]["run_id"] == new["id"]
+    assert row["swap"] == {"out": out, "in": new_in, "applied": True}
+
+    # swapping back undoes the override instead of piling up contradictions
+    back = finish(client, client.post(f"/api/run/{new['id']}/swap", json={"out": new_in, "in": out}).json())
+    assert back["overrides"] == {"include": [out], "exclude": [new_in]}
+    assert len(picks_rows(client.out)) == 2
+
+
+def test_strict_lines_blocks_short_bullets_in_swaps(client, monkeypatch):
+    """With strict_lines on, a bullet that leaves a word or two on its last line can't be swapped in."""
+    import linefit
+    from pathlib import Path
+    b = bankmod.load_dict(client.mod.BANK_PATH)
+    b["settings"]["strict_lines"] = True
+    bankmod.save(client.mod.BANK_PATH, b)
+    run_id = "20260101-000000_X"
+    d = client.out / run_id
+    d.mkdir(parents=True)
+    (d / "run.json").write_text(json.dumps({
+        "id": run_id, "filename": "x.pdf", "jd": JDS["backend"], "variant": "matcher",
+        "provenance": [{"bullet_id": "acme-api", "item_id": "acme"}, {"bullet_id": "acme-ci", "item_id": "acme"}]}))
+    monkeypatch.setattr(linefit, "bank_fit", lambda bank: {
+        "acme-ui": {"lines": 2, "last_fill": 0.1, "first_fill": 1.0, "chars_per_line": 110},
+        "acme-api-alt": {"lines": 1, "last_fill": 0.9, "first_fill": 0.9, "chars_per_line": 110}})
+    opts = {o["id"]: o for o in client.get(f"/api/run/{run_id}/swap-options").json()["acme"]}
+    assert opts["acme-ui"]["blocked"] and not opts["acme-api-alt"]["blocked"]
+    r = client.post(f"/api/run/{run_id}/swap", json={"out": "acme-api", "in": "acme-ui"})
+    assert r.status_code == 409 and "strict" in r.json()["detail"]
+    assert not Path(client.out / "picks.jsonl").exists()
