@@ -7,3 +7,4 @@ pypdf>=4.0
 pdfplumber>=0.11
 python-dotenv>=1.0
 anthropic>=0.40  # only used if you switch ENGINE=api (paid API); the default uses your Claude plan
+fastembed>=0.9  # ENGINE=local: on-device semantic matching (ONNX, no PyTorch); model downloads once

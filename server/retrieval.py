@@ -8,6 +8,8 @@ Deterministic and explainable. Each bullet gets a breakdown:
   evidence   - quantified results (numbers) and technical specificity
   recency    - current or recent work
   llm        - optional bonus from the model's ranking (semantic relevance)
+  semantic   - optional local embedding match (ENGINE=local, see semantic.py): importance-weighted
+               max cosine between the bullet and the job's requirements, 0..1 within the bank
 """
 from __future__ import annotations
 
@@ -62,8 +64,11 @@ def _recency(dates: str) -> float:
     return {0: 1.0, 1: 0.8, 2: 0.55, 3: 0.35}.get(max(0, date.today().year - newest), 0.15)
 
 
-def score_bank(bank: dict, job: JobAnalysis, llm_rank: dict[str, float] | None = None) -> tuple[list[Candidate], dict]:
-    """Return (candidates sorted by score, item info). Hidden items and bullets are skipped."""
+def score_bank(bank: dict, job: JobAnalysis, llm_rank: dict[str, float] | None = None,
+               semantic: dict[str, float] | None = None) -> tuple[list[Candidate], dict]:
+    """Return (candidates sorted by score, item info). Hidden items and bullets are skipped.
+
+    `semantic` (bullet id -> 0..1) adds parts["semantic"]; without it the part is left out."""
     reqs = {r.skill: r.importance for r in job.requirements}
     top_imp = max(reqs.values(), default=1.0)
     llm_rank = llm_rank or {}
@@ -115,6 +120,8 @@ def score_bank(bank: dict, job: JobAnalysis, llm_rank: dict[str, float] | None =
                 evidence = (0.5 if c.numbers else 0.0) + min(0.4, 0.1 * len(skills))
                 c.parts = {"coverage": cov, "keywords": min(kw, 1.0), "role": role, "evidence": evidence,
                            "recency": 0.3 * recency, "llm": llm_rank.get(b["id"], 0.0)}
+                if semantic is not None:
+                    c.parts["semantic"] = semantic.get(b["id"], 0.0)
                 c.score = kind_factor * sum(c.parts.values()) + (10.0 if c.pinned else 0.0)
                 cands.append(c)
     cands.sort(key=lambda c: -c.score)

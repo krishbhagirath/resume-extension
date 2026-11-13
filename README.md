@@ -67,6 +67,15 @@ Rewording is **off** by default (your exact words). If you turn it on in Setting
 
 `ENGINE=offline` in `.env` uses no Claude at all. `ENGINE=api` uses the paid API (needs `ANTHROPIC_API_KEY`).
 
+`ENGINE=local` also uses no Claude, but adds a **meaning match on your computer**: the small
+BAAI/bge-small-en-v1.5 model (via fastembed, ONNX, no PyTorch) compares each bullet with the job's top
+requirements and responsibility lines, so "high-throughput systems" can pick a Kafka bullet even though
+the posting never says Kafka. The model (~67 MB) downloads once into `output/cache/models`; after that it
+runs offline. Bullet embeddings are cached per bank version in `output/cache/emb`. Rewording needs Claude,
+so it's skipped in this mode. Measured on this machine: the first resume after starting the server spends
+about 1–3 s loading the model and embedding your bank; after that the matching step adds roughly 1–3 s per
+resume (the LaTeX layout is still most of the time). `python tests/benchmark.py --local` prints it per role.
+
 ## Privacy and safety
 
 - The server only listens on 127.0.0.1. Websites you visit can't use it: wrong Host headers are refused, cross-site requests are refused, and every action needs a secret token (`data/.token`) that only this page and your paired extension have.

@@ -166,6 +166,13 @@ def health():
             problem = "Claude Code is signed in with an API key, which bills the API. Run claude-login.bat again."
     elif eng == "api":
         info["mode"] = "api" if os.getenv("ANTHROPIC_API_KEY") else "offline"
+    elif eng == "local":
+        import importlib.util
+        if importlib.util.find_spec("fastembed"):
+            info["mode"] = "local"
+        else:
+            info["mode"] = "offline"
+            problem = "ENGINE=local needs fastembed. Run setup.bat (or pip install -r requirements.txt)."
     else:
         info["mode"] = "offline"
     if info["compiler"] == "none":
