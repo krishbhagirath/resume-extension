@@ -25,17 +25,20 @@ HEADER_LINES = {"experiences": 2.0, "projects": 1.2}
 DIMINISH = 0.7
 # How much each non-coverage signal counts next to requirement coverage (coverage weight = 1).
 SHORT_LINE_FACTOR = 0.85
-QUALITY_WEIGHTS = {"role": 0.5, "keywords": 0.4, "evidence": 0.25, "recency": 0.15, "llm": 1.0}
+# semantic (ENGINE=local) stands in for Claude's ranking, so its best bullet gets the same pull as
+# Claude's top pick: llm parts top out at tailor.RANK_BONUS (1.5) x weight 1.0; semantic is 0..1.
+QUALITY_WEIGHTS = {"role": 0.5, "keywords": 0.4, "evidence": 0.25, "recency": 0.15, "llm": 1.0, "semantic": 1.5}
 
 
 def quality(c: Candidate) -> float:
     p = c.parts
-    relevance = p.get("coverage", 0) + p.get("role", 0) + p.get("keywords", 0) + p.get("llm", 0)
+    relevance = (p.get("coverage", 0) + p.get("role", 0) + p.get("keywords", 0) + p.get("llm", 0)
+                 + p.get("semantic", 0))
     # Evidence and recency only count in proportion to relevance: a strong number on an
     # unrelated bullet shouldn't beat a relevant bullet.
     gate = min(1.0, relevance / 0.6)
     q = (QUALITY_WEIGHTS["role"] * p.get("role", 0) + QUALITY_WEIGHTS["keywords"] * p.get("keywords", 0)
-         + QUALITY_WEIGHTS["llm"] * p.get("llm", 0)
+         + QUALITY_WEIGHTS["llm"] * p.get("llm", 0) + QUALITY_WEIGHTS["semantic"] * p.get("semantic", 0)
          + gate * (QUALITY_WEIGHTS["evidence"] * p.get("evidence", 0) + QUALITY_WEIGHTS["recency"] * p.get("recency", 0)))
     if p.get("short_last_line"):
         q *= SHORT_LINE_FACTOR  # a word or two dangling on its own line: prefer a cleaner bullet

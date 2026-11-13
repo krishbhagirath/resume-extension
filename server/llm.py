@@ -1,5 +1,8 @@
 """One place for every model call: Claude Code (your Claude plan) or the paid API.
 
+ENGINE=local and ENGINE=offline never call a model from here: local uses the on-device
+semantic matcher (semantic.py) instead, offline uses the built-in matcher only.
+
 complete_json(prompt, schema) returns (parsed_json, stats). Calls are:
   * schema-constrained (Claude Code --json-schema, API tool_choice),
   * tool-less (the model can't read files, browse, or run anything),
@@ -39,17 +42,20 @@ class LLMError(RuntimeError):
 
 def engine() -> str:
     e = os.getenv("ENGINE", "claude-code").strip().lower()
-    return e if e in ("claude-code", "api", "offline") else "claude-code"
+    return e if e in ("claude-code", "api", "local", "offline") else "claude-code"
 
 
 def model_name() -> str:
-    return os.getenv("CLAUDE_CODE_MODEL", DEFAULT_CC_MODEL) if engine() == "claude-code" else \
+    e = engine()
+    if e == "local":
+        return "BAAI/bge-small-en-v1.5"
+    return os.getenv("CLAUDE_CODE_MODEL", DEFAULT_CC_MODEL) if e == "claude-code" else \
         os.getenv("CLAUDE_MODEL", DEFAULT_API_MODEL)
 
 
 def available() -> bool:
     e = engine()
-    if e == "offline":
+    if e in ("offline", "local"):
         return False
     if e == "api":
         return bool(os.getenv("ANTHROPIC_API_KEY"))
@@ -207,8 +213,8 @@ def _check(data, schema: dict) -> bool:
 def complete_json(prompt: str, schema: dict, *, system: str = SYSTEM, job_id: str | None = None,
                   timeout: int = 180, use_cache: bool = True) -> tuple[dict, dict]:
     eng = engine()
-    if eng == "offline":
-        raise LLMError("Offline mode: no model configured.", retryable=False, code="offline")
+    if eng in ("offline", "local"):
+        raise LLMError(f"{eng.capitalize()} mode: no Claude calls.", retryable=False, code="offline")
     key = hashlib.sha256(json.dumps([eng, model_name(), system, prompt, schema], sort_keys=True).encode()).hexdigest()[:32]
     cache_file = CACHE_DIR / f"{key}.json"
     if use_cache and cache_file.exists():
