@@ -17,6 +17,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "server"))
 os.environ["ENGINE"] = "offline"
+os.environ["LEARNED_WEIGHTS"] = "off"   # tests check the hand-set weights, not your learned ones
 if not shutil.which("tectonic") and not (ROOT / "bin" / "tectonic").exists() and shutil.which("xelatex"):
     os.environ["PATH"] = str(ROOT / "tests" / "support" / "bin") + os.pathsep + os.environ["PATH"]
 

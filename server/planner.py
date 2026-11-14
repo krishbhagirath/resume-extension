@@ -14,7 +14,12 @@ The layout optimizer then calls trim_once / add_once / swap_shorter with real PD
 """
 from __future__ import annotations
 
+import json
+import math
+import os
+import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import bank as bankmod
 import lexicon
@@ -29,19 +34,59 @@ SHORT_LINE_FACTOR = 0.85
 # Claude's top pick: llm parts top out at tailor.RANK_BONUS (1.5) x weight 1.0; semantic is 0..1.
 QUALITY_WEIGHTS = {"role": 0.5, "keywords": 0.4, "evidence": 0.25, "recency": 0.15, "llm": 1.0, "semantic": 1.5}
 
+# Weights learned from your A/B picks (tests/learn_weights.py) replace the hand-set ones above
+# while data/learned_weights.json exists. LEARNED_WEIGHTS=<path> points elsewhere; =off ignores it.
+LEARNED_FILE = Path(__file__).resolve().parent.parent / "data" / "learned_weights.json"
+_learned = {"checked": 0.0, "key": None, "value": None}
+
+
+def _learned_path() -> Path | None:
+    env = os.getenv("LEARNED_WEIGHTS")
+    if env and env.lower() == "off":
+        return None
+    return Path(env) if env else LEARNED_FILE
+
+
+def active_weights() -> tuple[dict, float, str]:
+    """(quality weights, short-line factor, source). Re-checks the file at most once a second.
+    A missing, unreadable or out-of-range file means the hand-set weights."""
+    now = time.time()
+    if now - _learned["checked"] < 1.0 and _learned["value"]:
+        return _learned["value"]
+    _learned["checked"] = now
+    path = _learned_path()
+    try:
+        key = (str(path), path.stat().st_mtime) if path else None
+    except OSError:
+        key = None
+    if key != _learned["key"] or not _learned["value"]:
+        _learned["key"] = key
+        _learned["value"] = (QUALITY_WEIGHTS, SHORT_LINE_FACTOR, "hand-set")
+        if key:
+            try:
+                d = json.loads(path.read_text(encoding="utf-8"))
+                w = {k: float(d["quality_weights"].get(k, v)) for k, v in QUALITY_WEIGHTS.items()}
+                f = float(d.get("short_line_factor", SHORT_LINE_FACTOR))
+                if all(math.isfinite(x) and 0 <= x <= 20 for x in w.values()) and 0.5 <= f <= 1.0:
+                    _learned["value"] = (w, f, "learned")
+            except (OSError, ValueError, KeyError, TypeError, AttributeError):
+                pass
+    return _learned["value"]
+
 
 def quality(c: Candidate) -> float:
     p = c.parts
+    w, short_factor, _ = active_weights()
     relevance = (p.get("coverage", 0) + p.get("role", 0) + p.get("keywords", 0) + p.get("llm", 0)
                  + p.get("semantic", 0))
     # Evidence and recency only count in proportion to relevance: a strong number on an
     # unrelated bullet shouldn't beat a relevant bullet.
     gate = min(1.0, relevance / 0.6)
-    q = (QUALITY_WEIGHTS["role"] * p.get("role", 0) + QUALITY_WEIGHTS["keywords"] * p.get("keywords", 0)
-         + QUALITY_WEIGHTS["llm"] * p.get("llm", 0) + QUALITY_WEIGHTS["semantic"] * p.get("semantic", 0)
-         + gate * (QUALITY_WEIGHTS["evidence"] * p.get("evidence", 0) + QUALITY_WEIGHTS["recency"] * p.get("recency", 0)))
+    q = (w["role"] * p.get("role", 0) + w["keywords"] * p.get("keywords", 0)
+         + w["llm"] * p.get("llm", 0) + w["semantic"] * p.get("semantic", 0)
+         + gate * (w["evidence"] * p.get("evidence", 0) + w["recency"] * p.get("recency", 0)))
     if p.get("short_last_line"):
-        q *= SHORT_LINE_FACTOR  # a word or two dangling on its own line: prefer a cleaner bullet
+        q *= short_factor  # a word or two dangling on its own line: prefer a cleaner bullet
     if c.bullet_id.endswith("-alt") and not p.get("llm") and not p.get("promoted"):
         q *= 0.75  # older wordings you set aside: only preferred when the model picks them
     return q

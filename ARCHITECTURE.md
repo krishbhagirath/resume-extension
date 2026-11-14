@@ -50,6 +50,7 @@ States: `queued → analyzing → matching → selecting → rendering → optim
 - `POST /api/picks {run_a, run_b, winner: "a"|"b", reasons: [projects|bullets|skills|layout]}` appends one line to `output/picks.jsonl`. For each run it saves the variant, the mode actually used (a Claude run that fell back is `offline`), the scorecard, the items and skills line, and the per-bullet score parts from `run.json`. No posting text.
 - **Swaps:** `GET /api/run/{id}/swap-options` lists the unused bullets of each printed item; with `strict_lines`, short-last-line bullets are marked blocked. `POST /api/run/{id}/swap {out, in}` (same item only) starts a job with `exclude`/`include` overrides merged from the base run. The excluded bullet is removed from the candidates and the included one is pinned. This happens after the re-rank, so the Claude prompt and its cache hit are unchanged. When the job finishes it logs a pick automatically (`source: "swap"`, the new run wins, reason `bullets`, plus `applied`: whether the swapped-in bullet actually fit).
 - Bank files are never written by any of this.
+- **Learned weights** (`tests/learn_weights.py`): one feature vector per resume (each score part summed over printed bullets, plus the short-last-line count). It fits `LogisticRegression(fit_intercept=False)` on `features(A) - features(B)` → winner, with each pick also added mirrored so swaps (always "B wins") don't bias it. Leave-one-out accuracy is compared with the hand-set weights scored as a linear model on the same features. Coverage is 1, `QUALITY_WEIGHTS` as set, and a short last line costs `(1 - SHORT_LINE_FACTOR)` × the mean bullet quality; evidence and recency are ungated there. If the learned weights win and there are ≥ `--min-picks` (15), they're written to `data/learned_weights.json` (git-ignored), scaled so the `QUALITY_WEIGHTS` total is unchanged, with negatives clamped to 0 and the short-line factor in 0.5–1.0. `planner.active_weights()` uses that file when it's present and valid (re-checked at most once a second), and `run.json` stats record `weights: learned | hand-set`. `LEARNED_WEIGHTS=<path>` points elsewhere and `LEARNED_WEIGHTS=off` ignores it; the test suite sets `off`.
 
 ## Security
 
@@ -72,7 +73,7 @@ States: `queued → analyzing → matching → selecting → rendering → optim
 ```
 pip install -r requirements-dev.txt
 python -m playwright install chromium   # once, for the extension tests
-python -m pytest -q                      # 142 tests, no Claude usage
+python -m pytest -q                      # 159 tests, no Claude usage
 python tests/benchmark.py                # per-role timing / coverage / overlap table
 npm install && npm run check:ext         # type-check the extension (tsc --checkJs)
 ```
@@ -82,6 +83,7 @@ npm install && npm run check:ext         # type-check the extension (tsc --check
 - `test_pipeline`: mocked Claude (bogus ids, rejected rewordings, usage limit fallback), idempotency, cancel, compile errors, restart recovery.
 - `test_security`: Host/Origin/cross-site/token/pairing/CORS/path traversal/size limits against the real app.
 - `test_compare`: mocked Claude. Covers the matcher variant making no model call, variant in the idempotency key, run folder collisions, `/api/compare` → `/api/picks` (validation, the saved scorecards and score parts), and manual swaps (refusals, the auto-logged pick, swapping back, strict-lines blocking).
+- `test_learn_weights`: synthetic picks from a known hidden taste. Checks the script recovers it and writes weights only when it beats the hand-set ones; too few picks, identical pairs and unreadable rows are skipped; the planner loads, validates and ignores the file as it should.
 - `test_extension`: the real unpacked extension in Chromium on synthetic Greenhouse, Lever, Workday (late render), LinkedIn (SPA navigation), Simplify, JSON-LD, non-job and malformed pages. It runs end to end through a real download and attach (checks the cover-letter box stays empty and nothing is submitted), and confirms a website's script can't reach the server.
 
 On Linux the tests use XeLaTeX with a Font Awesome stub in place of Tectonic (`tests/support/`); on Windows they use the real `bin/tectonic.exe`.

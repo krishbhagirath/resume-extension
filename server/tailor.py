@@ -311,6 +311,7 @@ def run(bank: dict, jd: str, *, title: str = "", company: str = "", force: bool 
     stats["seconds"] = round(time.time() - t0, 1)
     stats["compiles"] = lay["compiles"]
     stats["mode"] = mode
+    stats["weights"] = planner.active_weights()[2]   # "learned" when data/learned_weights.json is in use
     stats["pool_size"] = min(POOL_SIZE, len(cands)) if mode not in ("offline", "local") else 0
     return Result(plan=best.plan, pdf=best.pdf, tex=best.source, company=job.company, role=job.title,
                   analysis={"roles": job.roles, "primary_roles": job.primary_roles, "seniority": job.seniority,

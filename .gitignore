@@ -16,4 +16,6 @@ node_modules/
 # your real bank stays on your computer (setup copies example-bank.yaml the first time)
 data/experiences.yaml
 data/experiences.*.yaml
+# weights learned from your own A/B picks (tests/learn_weights.py)
+data/learned_weights.json
 *.zip
