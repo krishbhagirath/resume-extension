@@ -25,7 +25,7 @@ Updating: double-click `update.bat` (stops the server, installs anything new, te
 1. Open a posting or application form. Works on LinkedIn, Greenhouse, Lever, Workday, Ashby, iCIMS, SmartRecruiters, Workable, BambooHR, Jobvite, Indeed, Glassdoor, Simplify, WaterlooWorks, and most career pages (via the schema.org data most of them include).
 2. Click **Tailor resume** (drag it anywhere; hover for × to hide it on this page).
 3. Check company and role. The panel tells you how much text it found and whether it looks like a complete posting. Click **Make resume**. You'll see each step; you can cancel.
-4. The PDF downloads once it passes the one-page check. On an application form, click **Attach to this application**, then check the form before you submit.
+4. When it's ready, the panel lists every experience and project on the page. Nothing downloads yet. To swap one out, click **Replace** next to it and pick another from the same section. The resume is rebuilt (still checked to one page), and earlier changes carry over. Then click **Download**. On an application form, click **Attach to this application**, then check the form before you submit.
 
 ### Two versions, and teaching it what you like
 

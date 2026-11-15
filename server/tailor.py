@@ -132,11 +132,14 @@ Bullets:
 
 def run(bank: dict, jd: str, *, title: str = "", company: str = "", force: bool = False,
         rephrase: bool | None = None, job_id: str | None = None, progress=lambda s, m: None,
-        cancelled=lambda: False, use_llm: bool = True, include=(), exclude=()) -> Result:
+        cancelled=lambda: False, use_llm: bool = True, include=(), exclude=(), include_items=(),
+        exclude_items=()) -> Result:
     """use_llm=False skips the Claude re-rank (the "matcher" variant of an A/B comparison).
-    include / exclude are manual swaps: bullet ids forced onto the page / kept off it."""
+    include / exclude are manual swaps: bullet ids forced onto the page / kept off it.
+    include_items / exclude_items replace whole experiences or projects the same way."""
     t0 = time.time()
     include, exclude = set(include or ()), set(exclude or ())
+    include_items, exclude_items = set(include_items or ()), set(exclude_items or ())
     stats = {"llm_requests": 0, "llm_cached": 0, "input_tokens": 0, "output_tokens": 0, "timings": {}}
     warnings: list[str] = []
 
@@ -201,7 +204,15 @@ def run(bank: dict, jd: str, *, title: str = "", company: str = "", force: bool 
             warnings.append(f"Claude wasn't used ({e}). Picked with the built-in matcher instead.")
         tick("rank", t)
 
-    # 3a. manual swaps: excluded bullets never print, included ones are pinned
+    # 3a. manual replacements: an excluded item never prints, an included one is pinned (it goes in
+    # first, with its best bullets); then bullet swaps: excluded bullets never print, included are pinned
+    if include_items or exclude_items:
+        cands = [c for c in cands if c.item_id not in exclude_items]
+        for iid, info in items.items():
+            if iid in exclude_items:
+                info["pinned"] = False
+            elif iid in include_items:
+                info["pinned"] = True
     if include or exclude:
         cands = [c for c in cands if c.bullet_id not in exclude]
         for c in cands:
@@ -303,6 +314,8 @@ def run(bank: dict, jd: str, *, title: str = "", company: str = "", force: bool 
 
     card = evaluate.scorecard(job, sel, best.plan, best.measure.to_json(), provenance)
     missing = sorted(include - set(picked))
+    printed_items = {e["id"] for e in best.plan["experiences"] + best.plan["projects"] if e["bullet_ids"]}
+    missing += sorted(include_items - printed_items)
     if missing:
         warnings.append(f"Couldn't fit {', '.join(missing)} on the page.")
     # score includes +10 for pinned bullets (bank pins and manual swaps); parts never do

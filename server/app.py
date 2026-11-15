@@ -532,15 +532,20 @@ def _printed(meta: dict) -> dict[str, str]:
     return {p["bullet_id"]: p["item_id"] for p in meta.get("provenance") or []}
 
 
+def _strict_fit(bank: dict) -> tuple[bool, dict]:
+    """(strict_lines on?, measured line fit when it is). Fit failures just mean nothing is blocked."""
+    strict = bool(bank.get("settings", {}).get("strict_lines"))
+    if not strict:
+        return False, {}
+    try:
+        return True, linefit.bank_fit(bank)
+    except Exception:
+        return True, {}
+
+
 def _swap_options(meta: dict, bank: dict) -> dict[str, list[dict]]:
     printed = _printed(meta)
-    strict = bank.get("settings", {}).get("strict_lines")
-    fit = {}
-    if strict:
-        try:
-            fit = linefit.bank_fit(bank)
-        except Exception:
-            fit = {}
+    strict, fit = _strict_fit(bank)
     min_fill = bank.get("settings", {}).get("min_last_line_fill", 0.6)
     group = {b["id"]: b.get("alt_of") or b["id"] for s in ("experiences", "projects")
              for it in bank.get(s, []) for b in it.get("bullets", [])}
@@ -595,14 +600,90 @@ def swap_bullet(run_id: str, body: SwapBody):
     if choice["same_as"] and choice["same_as"] != body.out:
         raise HTTPException(409, f"That's another wording of {choice['same_as']}, which is already on the page. "
                                  "Swap that bullet instead.")
-    ov = m.get("overrides") or {}
-    include = (set(ov.get("include") or []) - {body.out}) | {body.in_}
-    exclude = (set(ov.get("exclude") or []) - {body.in_}) | {body.out}
+    ov = _overrides(m)
+    ov["include"] = (ov["include"] - {body.out}) | {body.in_}
+    ov["exclude"] = (ov["exclude"] - {body.in_}) | {body.out}
+    return _rebuild(run_id, m, ov, {"kind": "bullet", "out": body.out, "in": body.in_})
+
+
+def _overrides(meta: dict) -> dict[str, set]:
+    ov = meta.get("overrides") or {}
+    return {k: set(ov.get(k) or []) for k in pipeline.OVERRIDE_KEYS}
+
+
+def _rebuild(run_id: str, m: dict, ov: dict[str, set], swap: dict) -> dict:
+    """Start a job for the same posting with these manual changes. Logs a pick when it finishes."""
     req = {"jd": m["jd"], "company": m.get("company", ""), "role": m.get("role", ""), "url": m.get("url", ""),
            "force_text": True, "source": "swap", "variant": m.get("variant") or "claude",
-           "include": sorted(include), "exclude": sorted(exclude),
-           "swap": {"base_run": run_id, "out": body.out, "in": body.in_}}
+           **{k: sorted(v) for k, v in ov.items()}, "swap": {"base_run": run_id, **swap}}
     return store.start(req).public()
+
+
+def _item_info(item: dict, section: str) -> dict:
+    return {"id": item["id"], "title": item.get("title", item["id"]), "org": item.get("org") or "",
+            "section": section, "kind": item.get("kind") or ""}
+
+
+def _item_options(meta: dict, bank: dict) -> dict:
+    """What's on the page per section, and which other items could replace one of them."""
+    sel = meta.get("selection") or {}
+    strict, fit = _strict_fit(bank)
+    min_fill = bank.get("settings", {}).get("min_last_line_fill", 0.6)
+    by_id = {it["id"]: (it, s) for s in ("experiences", "projects") for it in bank.get(s, [])}
+    printed = {e["id"] for s in ("experiences", "projects") for e in sel.get(s, []) if e.get("bullet_ids")}
+    out = {}
+    for section in ("experiences", "projects"):
+        on_page = []
+        for e in sel.get(section, []):
+            if e.get("bullet_ids") and e["id"] in by_id:
+                on_page.append(_item_info(by_id[e["id"]][0], section) | {"bullets": len(e["bullet_ids"])})
+        unused = []
+        for it in bank.get(section, []):
+            if it["id"] in printed or it.get("hidden"):
+                continue
+            visible = [b for b in it.get("bullets", []) if not b.get("hidden")]
+            if not visible:
+                continue
+            clean = [b for b in visible if not (fit.get(b["id"]) and layout.short_last_line(fit[b["id"]], min_fill))]
+            # items that describe the same work as one on the page can only replace that one
+            overlaps = sorted(p for p in printed if p in set(it.get("overlaps") or [])
+                              or it["id"] in set(by_id[p][0].get("overlaps") or []))
+            unused.append(_item_info(it, section) | {"bullets": len(visible), "overlaps": overlaps,
+                                                     "blocked": bool(strict and not clean)})
+        out[section] = {"on_page": on_page, "unused": unused}
+    return out
+
+
+@app.get("/api/run/{run_id}/items")
+def run_items(run_id: str):
+    """The experiences and projects on this resume, and what could replace each one."""
+    return _item_options(_meta(run_id), _bank_or_400())
+
+
+@app.post("/api/run/{run_id}/replace")
+def replace_item(run_id: str, body: SwapBody):
+    """Rebuilds this resume with one experience/project replaced by another from the same section.
+    Earlier swaps carry over. Logs a pick when it finishes (reason: projects)."""
+    m = _meta(run_id)
+    if not m.get("jd"):
+        raise HTTPException(400, "This run has no saved job description.")
+    opts = _item_options(m, _bank_or_400())
+    section = next((s for s, v in opts.items() if any(i["id"] == body.out for i in v["on_page"])), None)
+    if not section:
+        raise HTTPException(400, "That experience or project isn't on this resume.")
+    choice = next((i for i in opts[section]["unused"] if i["id"] == body.in_), None)
+    if not choice:
+        raise HTTPException(409, "Pick an unused, visible item from the same section of your current bank.")
+    if choice["blocked"]:
+        raise HTTPException(409, "Every bullet of that item leaves a word or two on its last line, and strict lines "
+                                 "is on, so it can't be printed. Fix it in the bank first.")
+    if set(choice["overlaps"]) - {body.out}:
+        raise HTTPException(409, f"That describes the same work as {', '.join(choice['overlaps'])}, which is already "
+                                 "on the page. Replace that one instead.")
+    ov = _overrides(m)
+    ov["exclude_items"] = (ov["exclude_items"] - {body.in_}) | {body.out}
+    ov["include_items"] = (ov["include_items"] - {body.out}) | {body.in_}
+    return _rebuild(run_id, m, ov, {"kind": "item", "out": body.out, "in": body.in_})
 
 
 @app.get("/api/pdf/{run_id}")

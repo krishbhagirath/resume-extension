@@ -200,15 +200,15 @@ def test_manual_swap_rebuilds_and_logs_a_pick(client):
     new = finish(client, r.json())
     now = {p["bullet_id"] for p in new["provenance"]}
     assert out not in now and new_in in now and new["validation"]["one_page"]
-    assert new["overrides"] == {"include": [new_in], "exclude": [out]}
+    assert new["overrides"] == {"include": [new_in], "exclude": [out], "include_items": [], "exclude_items": []}
     [row] = picks_rows(client.out)
     assert row["source"] == "swap" and row["winner"] == "b" and row["reasons"] == ["bullets"]
     assert row["a"]["run_id"] == base["id"] and row["b"]["run_id"] == new["id"]
-    assert row["swap"] == {"out": out, "in": new_in, "applied": True}
+    assert row["swap"] == {"kind": "bullet", "out": out, "in": new_in, "applied": True}
 
     # swapping back undoes the override instead of piling up contradictions
     back = finish(client, client.post(f"/api/run/{new['id']}/swap", json={"out": new_in, "in": out}).json())
-    assert back["overrides"] == {"include": [out], "exclude": [new_in]}
+    assert back["overrides"] == {"include": [out], "exclude": [new_in], "include_items": [], "exclude_items": []}
     assert len(picks_rows(client.out)) == 2
 
 
@@ -233,3 +233,62 @@ def test_strict_lines_blocks_short_bullets_in_swaps(client, monkeypatch):
     r = client.post(f"/api/run/{run_id}/swap", json={"out": "acme-api", "in": "acme-ui"})
     assert r.status_code == 409 and "strict" in r.json()["detail"]
     assert not Path(client.out / "picks.jsonl").exists()
+
+
+# ---------------------------------------------------------------- replacing a whole item
+
+def bigger_bank(client, small_bank):
+    """Two more items, and limits low enough that some items stay off the page."""
+    b = small_bank
+    b["settings"].update(max_experiences=2, max_projects=1)
+    b["experiences"].append({"id": "cafe", "title": "Barista Lead", "org": "Corner Cafe", "kind": "work",
+                             "dates": "2023 – 2024", "bullets": [
+                                 {"id": "cafe-1", "text": "Trained 6 new baristas and cut average wait time by 2 minutes."},
+                                 {"id": "cafe-2", "text": "Built a Python script that tracked inventory for 40 items."}]})
+    b["experiences"].append({"id": "lab2", "title": "Lab Volunteer", "org": "Example Lab", "kind": "research",
+                             "dates": "2024", "overlaps": ["lab"], "bullets": [
+                                 {"id": "lab2-1", "text": "Labeled 2k images for the defect-detection dataset."},
+                                 {"id": "lab2-2", "text": "Reviewed OpenCV preprocessing output with the team."}]})
+    b["projects"].append({"id": "bot", "title": "Chat Bot", "stack": "Python, FastAPI", "bullets": [
+        {"id": "bot-1", "text": "Built a FastAPI chat bot answering 200 FAQ questions for a student club."},
+        {"id": "bot-2", "text": "Added pytest coverage for 30 bot intents in GitHub Actions CI."}]})
+    bankmod.save(client.mod.BANK_PATH, b)
+
+
+@needs_tex
+def test_replace_whole_item_before_download(client, small_bank):
+    bigger_bank(client, small_bank)
+    base = finish(client, client.post("/api/jobs", json={"jd": JDS["backend"], "company": "X", "role": "Y"}).json())
+    items = client.get(f"/api/run/{base['id']}/items").json()
+    on_exp = [i["id"] for i in items["experiences"]["on_page"]]
+    unused_exp = {i["id"]: i for i in items["experiences"]["unused"]}
+    assert len(on_exp) == 2 and all(i["bullets"] >= 1 and i["title"] for i in items["experiences"]["on_page"])
+    assert "web" not in [i["id"] for i in items["projects"]["unused"]]          # hidden items never offered
+    assert set(on_exp) | set(unused_exp) == {"acme", "lab", "cafe", "lab2"}
+
+    out = next(i for i in on_exp if i != "lab")                                  # replace something that isn't lab
+    new_in = "cafe" if "cafe" in unused_exp else next(iter(unused_exp))
+    # refusals: not on the page, other section, same work as another printed item
+    assert client.post(f"/api/run/{base['id']}/replace", json={"out": "web", "in": new_in}).status_code == 400
+    assert client.post(f"/api/run/{base['id']}/replace", json={"out": out, "in": "bot"}).status_code == 409
+    if "lab" in on_exp and "lab2" in unused_exp:
+        r = client.post(f"/api/run/{base['id']}/replace", json={"out": out, "in": "lab2"})
+        assert r.status_code == 409 and "same work" in r.json()["detail"]
+
+    new = finish(client, client.post(f"/api/run/{base['id']}/replace", json={"out": out, "in": new_in}).json())
+    now = [e["id"] for e in new["selection"]["experiences"] if e["bullet_ids"]]
+    assert out not in now and new_in in now and new["validation"]["one_page"]
+    assert new["overrides"]["exclude_items"] == [out] and new["overrides"]["include_items"] == [new_in]
+    [row] = picks_rows(client.out)
+    assert row["source"] == "swap" and row["reasons"] == ["projects"] and row["winner"] == "b"
+    assert row["swap"] == {"kind": "item", "out": out, "in": new_in, "applied": True}
+
+    # a later bullet swap keeps the replacement
+    opts = client.get(f"/api/run/{new['id']}/swap-options").json()
+    printed = {p["bullet_id"]: p["item_id"] for p in new["provenance"]}
+    pair = next(((b, o["id"]) for b, i in printed.items() for o in opts.get(i, [])
+                 if not o["blocked"] and o["same_as"] in (None, b)), None)
+    if pair:
+        after = finish(client, client.post(f"/api/run/{new['id']}/swap", json={"out": pair[0], "in": pair[1]}).json())
+        assert after["overrides"]["exclude_items"] == [out] and after["overrides"]["include_items"] == [new_in]
+        assert out not in [e["id"] for e in after["selection"]["experiences"] if e["bullet_ids"]]

@@ -35,6 +35,8 @@ import render
 import tailor
 
 VARIANTS = ("claude", "matcher")
+# manual changes carried from run to run: bullets swapped in/out, whole items replaced
+OVERRIDE_KEYS = ("include", "exclude", "include_items", "exclude_items")
 
 TERMINAL = {"completed", "failed", "cancelled"}
 TIMEOUT_S = 420
@@ -114,13 +116,13 @@ class JobStore:
         tpl = render.template_info(bank_dict)
         settings = bank_dict.get("settings", {})
         req = {**req, "variant": req.get("variant") or "claude",
-               "include": sorted(set(req.get("include") or [])), "exclude": sorted(set(req.get("exclude") or []))}
+               **{k: sorted(set(req.get(k) or [])) for k in OVERRIDE_KEYS}}
         if req["variant"] not in VARIANTS:
             raise ValueError(f"variant must be one of {VARIANTS}")
         key_src = json.dumps([re.sub(r"\s+", " ", req["jd"]).strip(), req.get("company", ""), req.get("role", ""),
                               bankmod.version_hash(bank_dict), tpl["version"], llm.engine(), llm.model_name(),
-                              settings.get("rephrase"), req.get("rephrase"), req["variant"], req["include"],
-                              req["exclude"]], sort_keys=True)
+                              settings.get("rephrase"), req.get("rephrase"), req["variant"],
+                              *[req[k] for k in OVERRIDE_KEYS]], sort_keys=True)
         key = hashlib.sha256(key_src.encode()).hexdigest()[:20]
         with self.lock:
             for j in self.jobs.values():
@@ -156,7 +158,7 @@ class JobStore:
             res = tailor.run(bank_dict, req["jd"], title=req.get("role", ""), company=req.get("company", ""),
                              force=req.get("force_text", False), rephrase=req.get("rephrase"), job_id=job.id,
                              progress=lambda s, m: self.set_state(job, s, m), cancelled=cancelled,
-                             use_llm=variant != "matcher", include=req.get("include"), exclude=req.get("exclude"))
+                             use_llm=variant != "matcher", **{k: req.get(k) for k in OVERRIDE_KEYS})
             if cancelled():
                 raise layout.LayoutError("Cancelled.")
             company = (req.get("company") or res.company or "").strip()
@@ -168,7 +170,7 @@ class JobStore:
             meta = {
                 "id": run_id, "job_id": job.id, "filename": filename, "company": company, "role": role,
                 "url": req.get("url", ""), "mode": res.stats.get("mode"), "variant": variant,
-                "overrides": {"include": req.get("include") or [], "exclude": req.get("exclude") or []},
+                "overrides": {k: req.get(k) or [] for k in OVERRIDE_KEYS},
                 "created": datetime.now().isoformat(timespec="seconds"),
                 "bank_version": bankmod.version_hash(bank_dict), "template": tpl["name"],
                 "template_version": tpl["version"], "selection": {**res.plan, "template": tpl["name"],
@@ -232,9 +234,16 @@ class JobStore:
             return
         try:
             old = json.loads(f.read_text(encoding="utf-8"))
-            printed = {b["id"] for b in new_meta.get("bullet_scores", [])}
-            picks.append(self.out, old, new_meta, "b", ["bullets"], "swap",
-                         swap={"out": swap.get("out"), "in": swap.get("in"), "applied": swap.get("in") in printed})
+            if swap.get("kind") == "item":   # a whole experience/project replaced
+                sel = new_meta.get("selection") or {}
+                printed = {e["id"] for s in ("experiences", "projects") for e in sel.get(s, []) if e.get("bullet_ids")}
+                reasons = ["projects"]
+            else:
+                printed = {b["id"] for b in new_meta.get("bullet_scores", [])}
+                reasons = ["bullets"]
+            picks.append(self.out, old, new_meta, "b", reasons, "swap",
+                         swap={"kind": swap.get("kind", "bullet"), "out": swap.get("out"), "in": swap.get("in"),
+                               "applied": swap.get("in") in printed})
         except Exception:
             self._log(Job(id="-", key="-"), "pick_log_failed", trace=traceback.format_exc()[-1500:])
 

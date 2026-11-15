@@ -21,6 +21,7 @@
   /** @type {ShadowRoot} */ let root;
   /** @type {any} */ let job = null;
   /** @type {any} */ let lastJob = null;
+  /** @type {any} */ let lastItems = null;   // what's on the page + what could replace each item
   let lastUrl = "", visible = false, polling = false, dismissedUrl = "";
 
   // ------------------------------------------------------------ UI
@@ -68,6 +69,17 @@
   .stats { display: flex; gap: 6px; flex-wrap: wrap; }
   .chip { padding: 1px 8px; border-radius: 99px; background: var(--sheet); border: 1px solid var(--rule); font-size: 11.5px; color: var(--slate); }
   .file { background: var(--mark); color: #18202E; padding: 1px 4px; word-break: break-all; font-weight: 500; }
+  .items { background: var(--sheet); border: 1px solid var(--rule); border-radius: 8px; padding: 8px 10px; }
+  .items h3 { margin: 6px 0 2px; font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--slate); }
+  .items h3:first-child { margin-top: 0; }
+  .items ul { list-style: none; margin: 0; padding: 0; }
+  .items li { padding: 5px 0; border-top: 1px solid var(--rule); }
+  .items h3 + ul li:first-child { border-top: 0; }
+  .items .it { display: flex; gap: 8px; align-items: baseline; }
+  .items .nm { font-weight: 600; flex: 1; min-width: 0; }
+  .items .nm small { font-weight: 400; color: var(--slate); }
+  .items .rep { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+  .items select { font: inherit; font-size: 12.5px; color: var(--ink); background: var(--paper); border: 1px solid var(--rule); border-radius: 6px; padding: 5px; width: 100%; }
   .foot { display: flex; justify-content: space-between; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--rule); color: var(--slate); font-size: 12px; }
   .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: s .7s linear infinite; flex: none; }
   @keyframes s { to { transform: rotate(360deg); } }
@@ -251,7 +263,7 @@
     let r;
     try {
       for (;;) {
-        r = await send({ type: "jobStatus", id });
+        r = await send({ type: "jobStatus", id, autoDownload: false });   // you check it first, then download
         if (!r.ok) { setMsg(esc(r.error), "err"); break; }
         renderSteps(r.job);
         if (["completed", "failed", "cancelled"].includes(r.job.state)) break;
@@ -282,18 +294,69 @@
     if (!$("#role").value) $("#role").value = res.role || "";
     btn.className = "secondary";
     btn.textContent = "Make another version";
-    const dl = r.download;
     const warnings = (res.warnings || []).map((/** @type {string} */ w) => `\n${esc(w)}`).join("");
-    if (dl?.downloaded) setMsg(`Downloaded <span class="file">${esc(res.filename)}</span>.${warnings}`, warnings ? "warn" : "ok");
-    else setMsg(`Made <span class="file">${esc(res.filename)}</span> but didn't download it (${esc(dl?.reason || "check it first")}).${warnings}`, "warn");
+    setMsg(`Ready: <span class="file">${esc(res.filename)}</span>. Check what's on it, then download.${warnings}`,
+      warnings || !sc.one_page ? "warn" : "ok");
     const canAttach = !!findResumeInput();
     $("#result").innerHTML = `
       <div class="stats"><span class="chip">${pct(sc.supported_coverage)} of what you can show</span><span class="chip">${sc.one_page ? "1 page" : "over 1 page"}</span>
         <span class="chip">${st.llm_requests ? `${st.llm_requests} Claude call${st.llm_requests > 1 ? "s" : ""}` : "no Claude usage"}</span><span class="chip">${st.seconds ?? "?"}s</span></div>
-      ${dl?.downloaded ? "" : '<button class="primary" data-act="download">Download anyway</button>'}
-      ${canAttach ? '<button class="primary" data-act="attach">Attach to this application</button>' : ""}
+      <div class="items" id="items"><span class="spin"></span> Loading what's on the page…</div>
+      <button class="primary" data-act="download">${sc.one_page ? "Download" : "Download anyway (over 1 page)"}</button>
+      ${canAttach ? '<button class="secondary" data-act="attach">Attach to this application</button>' : ""}
       <button class="secondary" data-act="openPdf">Open PDF</button>
       <button class="secondary" data-act="overleaf">Edit in Overleaf</button>`;
+    loadItems(res.run_id);
+  }
+
+  // ------------------------------------------------------------ preview + replace
+  const SECTION = { experiences: "Experience", projects: "Projects" };
+  /** @param {string} runId */
+  async function loadItems(runId) {
+    const r = await send({ type: "runItems", runId });
+    const box = $("#items");
+    if (!box) return;
+    if (!r.ok) { box.textContent = `Couldn't list what's on the page (${r.error}).`; return; }
+    lastItems = r.items;
+    box.innerHTML = Object.entries(SECTION).map(([key, label]) => {
+      const s = r.items[key];
+      if (!s?.on_page?.length) return "";
+      return `<h3>${label}</h3><ul>${s.on_page.map((/** @type {any} */ it) => `
+        <li data-item="${esc(it.id)}"><div class="it"><span class="nm">${esc(it.title)}${it.org ? ` <small>${esc(it.org)}</small>` : ""}</span>
+          <small>${it.bullets} bullet${it.bullets === 1 ? "" : "s"}</small>
+          ${s.unused.length ? `<button class="link" data-act="replace" data-section="${key}" data-item="${esc(it.id)}">Replace</button>` : ""}</div>
+          <div class="rep" hidden></div></li>`).join("")}</ul>`;
+    }).join("") || "Nothing listed.";
+  }
+
+  /** @param {HTMLElement} btn */
+  function openReplace(btn) {
+    const li = /** @type {HTMLElement} */ (btn.closest("li"));
+    const rep = /** @type {HTMLElement} */ (li.querySelector(".rep"));
+    if (!rep.hidden) { rep.hidden = true; return; }
+    const out = btn.dataset.item || "", section = btn.dataset.section || "";
+    // an item describing the same work as a different one on the page can't come in here
+    const rows = (lastItems?.[section]?.unused || []).filter((/** @type {any} */ u) => u.overlaps.every((/** @type {string} */ o) => o === out));
+    rep.innerHTML = rows.length ? `
+      <select aria-label="Use this instead">${rows.map((/** @type {any} */ u) =>
+        `<option value="${esc(u.id)}" ${u.blocked ? "disabled" : ""}>${esc(u.title)}${u.org ? `, ${esc(u.org)}` : ""}${u.blocked ? " (short last lines: can't print)" : ""}</option>`).join("")}</select>
+      <button class="secondary" data-act="doReplace" data-item="${esc(out)}">Use this instead (rebuilds the resume)</button>`
+      : "<small>Nothing else in this section can replace it.</small>";
+    const sel = rep.querySelector("select");
+    const first = rows.find((/** @type {any} */ u) => !u.blocked);
+    if (sel && first) sel.value = first.id;
+    rep.hidden = false;
+  }
+
+  /** @param {HTMLElement} btn */
+  async function doReplace(btn) {
+    if (polling || !lastJob) return;
+    const sel = /** @type {HTMLSelectElement | null} */ (btn.closest(".rep")?.querySelector("select") || null);
+    if (!sel?.value || sel.selectedOptions[0]?.disabled) return;
+    setMsg('<span class="spin"></span> Rebuilding with your change…');
+    const r = await send({ type: "replaceItem", runId: lastJob.result.run_id, out: btn.dataset.item, in: sel.value, url: location.href });
+    if (!r.ok) return setMsg(esc(r.error), "err");
+    await follow(r.job.id);
   }
 
   const ICON = { completed: "✓", failed: "✕", cancelled: "✕" };
@@ -347,7 +410,10 @@
     if (act === "download" && lastJob) {
       const r = await send({ type: "download", id: lastJob.id });
       if (r.ok) setMsg(`Downloaded <span class="file">${esc(lastJob.result.filename)}</span>.`, "ok");
+      else setMsg(esc(r.error), "err");
     }
+    if (act === "replace") openReplace(/** @type {HTMLElement} */ (/** @type {HTMLElement} */ (e.target).closest("[data-act]")));
+    if (act === "doReplace") doReplace(/** @type {HTMLElement} */ (/** @type {HTMLElement} */ (e.target).closest("[data-act]")));
     if (act === "openPdf" && lastJob) send({ type: "openRun", runId: lastJob.result.run_id, kind: "pdf" });
     if (act === "overleaf" && lastJob) send({ type: "openRun", runId: lastJob.result.run_id, kind: "overleaf" });
     if (act === "openApp") send({ type: "openApp" });

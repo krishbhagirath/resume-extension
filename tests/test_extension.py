@@ -7,6 +7,7 @@ Skipped when Playwright/Chromium aren't available.
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import socket
@@ -169,12 +170,31 @@ def test_dismiss_and_hide(browser):
 def test_end_to_end_download_and_attach(browser):
     page = open_page(browser, "https://boards.greenhouse.io/examplecorp/jobs/123")
     open_panel(page)
-    page.evaluate("document.querySelector('resume-tailor-widget').shadowRoot.querySelector('.primary[data-act=make]').click()")
-    page.wait_for_function("() => /Downloaded|Made /.test(document.querySelector('resume-tailor-widget').shadowRoot.querySelector('#msg').textContent)", timeout=120000)
-    msg = page.evaluate("document.querySelector('resume-tailor-widget').shadowRoot.querySelector('#msg').textContent")
-    assert "Downloaded Krish_Bhagirath_Examplecorp_SoftwareEngineeringInternBackend_Resume.pdf" in msg, msg
-    steps = page.evaluate("document.querySelector('resume-tailor-widget').shadowRoot.querySelector('#steps').textContent")
+    R = "document.querySelector('resume-tailor-widget').shadowRoot"
+    page.evaluate(f"{R}.querySelector('.primary[data-act=make]').click()")
+    page.wait_for_function(f"() => /^Ready:/.test({R}.querySelector('#msg').textContent)", timeout=120000)
+    msg = page.evaluate(f"{R}.querySelector('#msg').textContent")
+    assert "Krish_Bhagirath_Examplecorp_SoftwareEngineeringInternBackend_Resume.pdf" in msg, msg
+    steps = page.evaluate(f"{R}.querySelector('#steps').textContent")
     assert "Resume ready" in steps
+    # nothing downloads until you click Download: first, preview what's on the page
+    assert browser.sw.evaluate("chrome.downloads.search({}).then(x => x.length)") == 0
+    page.wait_for_function(f"() => {R}.querySelectorAll('#items li[data-item]').length > 0", timeout=15000)
+    before = page.evaluate(f"[...{R}.querySelectorAll('#items li[data-item]')].map(li => li.dataset.item)")
+    # replace one experience/project with another from the same section, before downloading
+    out = page.evaluate(f"""() => {{
+      const b = {R}.querySelector('#items [data-act=replace]'); b.click(); return b.dataset.item; }}""")
+    page.evaluate(f"{R}.querySelector('#items [data-act=doReplace]').click()")
+    items_now = f"[...{R}.querySelectorAll('#items li[data-item]')].map(li => li.dataset.item)"
+    page.wait_for_function(f"() => /^Ready:/.test({R}.querySelector('#msg').textContent) "
+                           f"&& {items_now}.length > 0 && !{items_now}.includes({json.dumps(out)})", timeout=120000)
+    after = page.evaluate(f"[...{R}.querySelectorAll('#items li[data-item]')].map(li => li.dataset.item)")
+    assert out in before and out not in after, (before, after)
+    assert browser.sw.evaluate("chrome.downloads.search({}).then(x => x.length)") == 0
+    page.evaluate(f"{R}.querySelector('[data-act=download]').click()")
+    page.wait_for_function(f"() => /^Downloaded/.test({R}.querySelector('#msg').textContent)", timeout=15000)
+    assert "Downloaded Krish_Bhagirath_Examplecorp_SoftwareEngineeringInternBackend_Resume.pdf" in \
+        page.evaluate(f"{R}.querySelector('#msg').textContent")
     # downloaded through chrome.downloads, complete, right name
     for _ in range(40):
         items = browser.sw.evaluate("chrome.downloads.search({}).then(x => x.map(d => [d.filename, d.state, d.error || '', d.url]))")
