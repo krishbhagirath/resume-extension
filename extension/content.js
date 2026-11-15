@@ -21,7 +21,8 @@
   /** @type {ShadowRoot} */ let root;
   /** @type {any} */ let job = null;
   /** @type {any} */ let lastJob = null;
-  /** @type {any} */ let lastItems = null;   // what's on the page + what could replace each item
+  /** @type {any} */ let lastOpts = null;    // what's on the page, spare bullets, items that could come in
+  let afterNote = "";                       // shown once with the next "Ready" (what a batch changed)
   let lastUrl = "", visible = false, polling = false, dismissedUrl = "";
 
   // ------------------------------------------------------------ UI
@@ -44,7 +45,7 @@
   .dismiss { position: absolute; top: -7px; left: -7px; width: 20px; height: 20px; border-radius: 50%; border: 0; background: #5A6578; color: #fff;
     font-size: 13px; line-height: 20px; padding: 0; opacity: 0; transition: opacity .15s; }
   .pillbox:hover .dismiss, .dismiss:focus-visible { opacity: 1; }
-  .panel { width: 370px; max-width: calc(100vw - 40px); max-height: calc(100vh - 140px); overflow: auto; background: var(--paper); color: var(--ink);
+  .panel { width: 420px; max-width: calc(100vw - 40px); max-height: calc(100vh - 140px); overflow: auto; background: var(--paper); color: var(--ink);
     border: 1px solid var(--rule); border-radius: 12px; padding: 14px; font-size: 13px; line-height: 1.45; box-shadow: 0 12px 40px rgba(24,32,46,.25); }
   .head { display: flex; align-items: center; margin-bottom: 10px; }
   .head h2 { font-size: 14.5px; margin: 0; font-weight: 700; flex: 1; }
@@ -69,17 +70,28 @@
   .stats { display: flex; gap: 6px; flex-wrap: wrap; }
   .chip { padding: 1px 8px; border-radius: 99px; background: var(--sheet); border: 1px solid var(--rule); font-size: 11.5px; color: var(--slate); }
   .file { background: var(--mark); color: #18202E; padding: 1px 4px; word-break: break-all; font-weight: 500; }
-  .items { background: var(--sheet); border: 1px solid var(--rule); border-radius: 8px; padding: 8px 10px; }
-  .items h3 { margin: 6px 0 2px; font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--slate); }
-  .items h3:first-child { margin-top: 0; }
-  .items ul { list-style: none; margin: 0; padding: 0; }
-  .items li { padding: 5px 0; border-top: 1px solid var(--rule); }
-  .items h3 + ul li:first-child { border-top: 0; }
-  .items .it { display: flex; gap: 8px; align-items: baseline; }
-  .items .nm { font-weight: 600; flex: 1; min-width: 0; }
-  .items .nm small { font-weight: 400; color: var(--slate); }
-  .items .rep { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
-  .items select { font: inherit; font-size: 12.5px; color: var(--ink); background: var(--paper); border: 1px solid var(--rule); border-radius: 6px; padding: 5px; width: 100%; }
+  .editor { display: flex; flex-direction: column; gap: 6px; }
+  .ed-head { display: flex; flex-direction: column; margin-bottom: 2px; }
+  .ed-head small { color: var(--slate); font-size: 12px; }
+  .editor h3 { margin: 6px 0 0; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--slate); }
+  .card { background: var(--sheet); border: 1px solid var(--rule); border-left: 3px solid var(--rule); border-radius: 8px; padding: 8px 10px; }
+  .card.changed { border-left-color: var(--mark); }
+  .card.gone .nm { text-decoration: line-through; color: var(--slate); }
+  .row1 { display: flex; gap: 8px; align-items: center; }
+  .row1 .nm { flex: 1; min-width: 0; font-weight: 600; }
+  .row1 .nm small { display: block; font-weight: 400; font-size: 11.5px; color: var(--slate); }
+  select.act { font: inherit; font-size: 12px; color: var(--ink); background: var(--paper); border: 1px solid var(--rule); border-radius: 6px; padding: 4px 6px; max-width: 175px; }
+  select.act:disabled { opacity: .5; }
+  .card .more { margin-top: 5px; font-size: 11.5px; color: var(--slate); text-decoration: none; }
+  .bl { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+  .bl li { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; border-radius: 6px; background: var(--paper); border: 1px solid transparent; }
+  .bl li.changed { border-color: var(--mark); }
+  .bl li.gone .tx { text-decoration: line-through; color: var(--slate); }
+  .bl .tx { font-size: 12px; line-height: 1.35; }
+  .bl select.act { max-width: 100%; align-self: flex-start; }
+  .applybar { position: sticky; bottom: -14px; display: flex; gap: 8px; align-items: center; background: var(--paper); border-top: 1px solid var(--rule); padding: 10px 0 6px; z-index: 1; }
+  .applybar span { flex: 1; font-weight: 600; }
+  .applybar .primary, .applybar .secondary { width: auto; padding: 8px 12px; }
   .foot { display: flex; justify-content: space-between; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--rule); color: var(--slate); font-size: 12px; }
   .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: s .7s linear infinite; flex: none; }
   @keyframes s { to { transform: rotate(360deg); } }
@@ -131,6 +143,8 @@
 
   /** @param {string} sel @returns {any} */
   const $ = (sel) => root.querySelector(sel);
+  /** @param {string} sel @returns {any[]} */
+  const $$ = (sel) => [...root.querySelectorAll(sel)];
   const panel = () => $(".panel");
   /** @param {string} html @param {string} [kind] */
   function setMsg(html, kind = "") { const m = $("#msg"); m.className = "msg " + kind; m.innerHTML = html; }
@@ -289,87 +303,132 @@
       return;
     }
     lastJob = j;
+    $("#steps").hidden = true;   // done: give the space to the preview
     const res = j.result, sc = res.scorecard || {}, st = res.stats || {};
     if (!$("#company").value) $("#company").value = res.company || "";
     if (!$("#role").value) $("#role").value = res.role || "";
     btn.className = "secondary";
     btn.textContent = "Make another version";
     const warnings = (res.warnings || []).map((/** @type {string} */ w) => `\n${esc(w)}`).join("");
-    setMsg(`Ready: <span class="file">${esc(res.filename)}</span>. Check what's on it, then download.${warnings}`,
+    const note = afterNote ? `\n${esc(afterNote)}` : "";
+    afterNote = "";
+    setMsg(`Ready: <span class="file">${esc(res.filename)}</span>. Check what's on it, then download.${note}${warnings}`,
       warnings || !sc.one_page ? "warn" : "ok");
     const canAttach = !!findResumeInput();
     $("#result").innerHTML = `
       <div class="stats"><span class="chip">${pct(sc.supported_coverage)} of what you can show</span><span class="chip">${sc.one_page ? "1 page" : "over 1 page"}</span>
         <span class="chip">${st.llm_requests ? `${st.llm_requests} Claude call${st.llm_requests > 1 ? "s" : ""}` : "no Claude usage"}</span><span class="chip">${st.seconds ?? "?"}s</span></div>
-      <div class="items" id="items"><span class="spin"></span> Loading what's on the page…</div>
+      <div class="editor" id="editor"><span class="spin"></span> Loading what's on the page…</div>
+      <div class="applybar" id="applybar" hidden><span id="nchanges"></span>
+        <button class="secondary" data-act="resetEdits">Reset</button><button class="primary" data-act="applyEdits">Apply &amp; rebuild</button></div>
       <button class="primary" data-act="download">${sc.one_page ? "Download" : "Download anyway (over 1 page)"}</button>
       ${canAttach ? '<button class="secondary" data-act="attach">Attach to this application</button>' : ""}
       <button class="secondary" data-act="openPdf">Open PDF</button>
       <button class="secondary" data-act="overleaf">Edit in Overleaf</button>`;
-    loadItems(res.run_id);
+    loadEditor(res.run_id);
   }
 
-  // ------------------------------------------------------------ preview + replace
+  // ------------------------------------------------------------ preview editor: change several things, apply once
   const SECTION = { experiences: "Experience", projects: "Projects" };
+  const FIXED = ["keep", "remove", "any"];
+  /** @param {string} t @param {number} n */
+  const cut = (t, n) => (t.length > n ? t.slice(0, n - 1) + "…" : t);
+
   /** @param {string} runId */
-  async function loadItems(runId) {
-    const r = await send({ type: "runItems", runId });
-    const box = $("#items");
+  async function loadEditor(runId) {
+    const r = await send({ type: "editOptions", runId });
+    const box = $("#editor");
     if (!box) return;
     if (!r.ok) { box.textContent = `Couldn't list what's on the page (${r.error}).`; return; }
-    lastItems = r.items;
-    box.innerHTML = Object.entries(SECTION).map(([key, label]) => {
-      const s = r.items[key];
-      if (!s?.on_page?.length) return "";
-      return `<h3>${label}</h3><ul>${s.on_page.map((/** @type {any} */ it) => `
-        <li data-item="${esc(it.id)}"><div class="it"><span class="nm">${esc(it.title)}${it.org ? ` <small>${esc(it.org)}</small>` : ""}</span>
-          <small>${it.bullets} bullet${it.bullets === 1 ? "" : "s"}</small>
-          ${s.unused.length ? `<button class="link" data-act="replace" data-section="${key}" data-item="${esc(it.id)}">Replace</button>` : ""}
-          <button class="link" data-act="remove" data-item="${esc(it.id)}" title="Leave it off; the space goes to whatever fits best">Remove</button></div>
-          <div class="rep" hidden></div></li>`).join("")}</ul>`;
-    }).join("") || "Nothing listed.";
-    box.insertAdjacentHTML("afterbegin", '<small>Remove or replace anything below; the resume rebuilds and you see it again before downloading.</small>');
+    lastOpts = r.items;
+    box.innerHTML = `<div class="ed-head"><b>On this resume</b><small>Remove or replace experiences, projects or single bullets. Pick as many as you like, then apply them together.</small></div>` +
+      Object.entries(SECTION).map(([key, label]) => {
+        const s = r.items[key];
+        return s?.on_page?.length ? `<h3>${label}</h3>` + s.on_page.map((/** @type {any} */ it) => itemCard(it, s.unused, key)).join("") : "";
+      }).join("");
+    box.addEventListener("change", updateEditor);
+    updateEditor();
   }
 
-  /** Rebuild without an item. `inId`: a specific item, "any" (best fit for this job), or "" to just remove it.
-   * @param {string} out @param {string} inId */
-  async function rebuildWithout(out, inId) {
+  /** @param {any} it @param {any[]} unused @param {string} key */
+  function itemCard(it, unused, key) {
+    const cands = unused.filter((u) => !u.blocked);          // items that can't print aren't offered
+    const spare = (it.spare || []).filter((/** @type {any} */ o) => !o.blocked);
+    const bullets = it.printed.map((/** @type {any} */ b) => {
+      // another wording of a different printed bullet would just reword that one: only offer it here
+      const opts = spare.filter((/** @type {any} */ o) => !o.same_as || o.same_as === b.id);
+      return `<li data-bullet="${esc(b.id)}"><span class="tx">${esc(b.text)}</span>
+        <select class="act" data-kind="bullet" data-out="${esc(b.id)}" aria-label="Change this bullet">
+          <option value="keep">Keep</option><option value="remove">Remove</option>
+          ${opts.length ? `<optgroup label="Swap for">${opts.map((/** @type {any} */ o) =>
+            `<option value="${esc(o.id)}">${esc(cut((o.same_as ? "Other wording: " : "") + o.text, 80))}</option>`).join("")}</optgroup>` : ""}
+        </select></li>`;
+    }).join("");
+    return `<div class="card" data-item="${esc(it.id)}" data-section="${key}">
+      <div class="row1"><div class="nm">${esc(it.title)}${it.org ? `<small>${esc(it.org)}</small>` : ""}</div>
+        <select class="act" data-kind="item" data-out="${esc(it.id)}" aria-label="Change ${esc(it.title)}">
+          <option value="keep">Keep</option><option value="remove">Remove</option>
+          ${cands.length ? `<optgroup label="Replace with"><option value="any">Best fit for this job</option>${cands.map((u) =>
+            `<option value="${esc(u.id)}" data-overlaps="${esc(u.overlaps.join(" "))}">${esc(cut(u.title + (u.org ? ", " + u.org : ""), 48))}</option>`).join("")}</optgroup>` : ""}
+        </select></div>
+      <button class="link more" data-act="toggleBullets">${it.printed.length} bullet${it.printed.length === 1 ? "" : "s"}${spare.length ? ` · ${spare.length} unused` : ""} ▸</button>
+      <ul class="bl" hidden>${bullets}</ul></div>`;
+  }
+
+  /** Keeps the editor consistent after any change: no item or bullet picked twice, bullets of an item that's
+   * leaving are locked, changed rows are marked, and Download waits until changes are applied or reset. */
+  function updateEditor() {
+    const sels = $$("#editor select.act");
+    const leaving = new Set(sels.filter((s) => s.dataset.kind === "item" && s.value !== "keep").map((s) => s.dataset.out));
+    /** @param {string} kind */
+    const picked = (kind) => new Map(sels.filter((s) => s.dataset.kind === kind && !FIXED.includes(s.value)).map((s) => [s.value, s]));
+    const pick = { item: picked("item"), bullet: picked("bullet") };
+    for (const s of sels) {
+      for (const o of s.querySelectorAll("option")) {
+        if (FIXED.includes(o.value)) continue;
+        const other = /** @type {any} */ (pick)[s.dataset.kind].get(o.value);
+        // an item describing the same work as one staying on the page can't come in
+        const sameWork = (o.dataset.overlaps || "").split(" ").filter(Boolean).some((x) => x !== s.dataset.out && !leaving.has(x));
+        o.disabled = (!!other && other !== s) || sameWork;
+      }
+    }
+    for (const card of $$("#editor .card")) {
+      const isel = card.querySelector('select[data-kind="item"]');
+      const off = isel.value !== "keep";
+      for (const b of card.querySelectorAll('select[data-kind="bullet"]')) {
+        if (off) b.value = "keep";
+        b.disabled = off;
+        b.closest("li").classList.toggle("changed", b.value !== "keep");
+        b.closest("li").classList.toggle("gone", b.value === "remove");
+      }
+      card.classList.toggle("gone", isel.value === "remove");
+      card.classList.toggle("changed", off || !!card.querySelector("li.changed"));
+    }
+    const n = sels.filter((s) => !s.disabled && s.value !== "keep").length;
+    $("#applybar").hidden = n === 0;
+    $("#nchanges").textContent = `${n} change${n === 1 ? "" : "s"}`;
+    const dl = $('[data-act="download"]');
+    if (dl) { dl.disabled = n > 0; dl.title = n ? "Apply or reset your changes first" : ""; }
+  }
+
+  async function applyEdits() {
     if (polling || !lastJob) return;
-    const name = (/** @param {string} id */ (id) => {
-      for (const s of Object.values(lastItems || {})) for (const it of [...s.on_page, ...s.unused]) if (it.id === id) return it.title;
-      return id;
-    });
-    setMsg(`<span class="spin"></span> ${inId === "" ? `Removing ${esc(name(out))}`
-      : inId === "any" ? `Replacing ${esc(name(out))} with the best fit for this job` : `Replacing ${esc(name(out))} with ${esc(name(inId))}`}…`);
-    const r = await send({ type: "replaceItem", runId: lastJob.result.run_id, out, in: inId, url: location.href });
-    if (!r.ok) return setMsg(esc(r.error), "err");
+    const sels = $$("#editor select.act").filter((s) => !s.disabled && s.value !== "keep");
+    if (!sels.length) return;
+    /** @param {string} kind */
+    const list = (kind) => sels.filter((s) => s.dataset.kind === kind).map((s) => ({ out: s.dataset.out, in: s.value === "remove" ? null : s.value }));
+    setMsg(`<span class="spin"></span> Rebuilding with ${sels.length} change${sels.length === 1 ? "" : "s"}…`);
+    $("#applybar").hidden = true;
+    const r = await send({ type: "applyEdits", runId: lastJob.result.run_id, items: list("item"), bullets: list("bullet"), url: location.href });
+    if (!r.ok) { $("#applybar").hidden = false; return setMsg(esc(r.error), "err"); }
+    const auto = (r.job.changes || []).filter((/** @type {any} */ c) => c.chosen === "auto").map((/** @type {any} */ c) => c.title);
+    afterNote = auto.length ? `Best fit picked: ${auto.join(", ")}.` : "";
     await follow(r.job.id);
   }
 
-  /** @param {HTMLElement} btn */
-  function openReplace(btn) {
-    const li = /** @type {HTMLElement} */ (btn.closest("li"));
-    const rep = /** @type {HTMLElement} */ (li.querySelector(".rep"));
-    if (!rep.hidden) { rep.hidden = true; return; }
-    const out = btn.dataset.item || "", section = btn.dataset.section || "";
-    // an item describing the same work as a different one on the page can't come in here
-    const rows = (lastItems?.[section]?.unused || []).filter((/** @type {any} */ u) => u.overlaps.every((/** @type {string} */ o) => o === out));
-    const usable = rows.filter((/** @type {any} */ u) => !u.blocked);
-    rep.innerHTML = rows.length ? `
-      <select aria-label="Replace with">
-        ${usable.length ? '<option value="any">Best fit for this job (let it choose)</option>' : ""}
-        ${rows.map((/** @type {any} */ u) =>
-        `<option value="${esc(u.id)}" ${u.blocked ? "disabled" : ""}>${esc(u.title)}${u.org ? `, ${esc(u.org)}` : ""}${u.blocked ? " (short last lines: can't print)" : ""}</option>`).join("")}</select>
-      <button class="secondary" data-act="doReplace" data-item="${esc(out)}">Replace and rebuild</button>`
-      : "<small>Nothing else in this section can replace it. Use Remove to just leave it off.</small>";
-    rep.hidden = false;
-  }
-
-  /** @param {HTMLElement} btn */
-  async function doReplace(btn) {
-    const sel = /** @type {HTMLSelectElement | null} */ (btn.closest(".rep")?.querySelector("select") || null);
-    if (!sel?.value || sel.selectedOptions[0]?.disabled) return;
-    await rebuildWithout(btn.dataset.item || "", sel.value);
+  function resetEdits() {
+    for (const s of $$("#editor select.act")) s.value = "keep";
+    updateEditor();
   }
 
   const ICON = { completed: "✓", failed: "✕", cancelled: "✕" };
@@ -420,14 +479,19 @@
       setMsg('<span class="spin"></span> Cancelling…');
     }
     if (act === "attach") attach();
-    if (act === "download" && lastJob) {
+    if (act === "download" && lastJob && !$('[data-act="download"]')?.disabled) {
       const r = await send({ type: "download", id: lastJob.id });
       if (r.ok) setMsg(`Downloaded <span class="file">${esc(lastJob.result.filename)}</span>.`, "ok");
       else setMsg(esc(r.error), "err");
     }
-    if (act === "replace") openReplace(/** @type {HTMLElement} */ (/** @type {HTMLElement} */ (e.target).closest("[data-act]")));
-    if (act === "doReplace") doReplace(/** @type {HTMLElement} */ (/** @type {HTMLElement} */ (e.target).closest("[data-act]")));
-    if (act === "remove") rebuildWithout(/** @type {HTMLElement} */ (/** @type {HTMLElement} */ (e.target).closest("[data-act]")).dataset.item || "", "");
+    if (act === "applyEdits") applyEdits();
+    if (act === "resetEdits") resetEdits();
+    if (act === "toggleBullets") {
+      const b = /** @type {HTMLElement} */ (/** @type {HTMLElement} */ (e.target).closest("[data-act]"));
+      const ul = /** @type {HTMLElement} */ (b.parentElement?.querySelector(".bl"));
+      ul.hidden = !ul.hidden;
+      b.textContent = b.textContent.replace(/[▸▾]$/, ul.hidden ? "▸" : "▾");
+    }
     if (act === "openPdf" && lastJob) send({ type: "openRun", runId: lastJob.result.run_id, kind: "pdf" });
     if (act === "overleaf" && lastJob) send({ type: "openRun", runId: lastJob.result.run_id, kind: "overleaf" });
     if (act === "openApp") send({ type: "openApp" });
@@ -459,7 +523,7 @@
     checks = 0;
     if (host && !polling) {
       $("#company").value = ""; $("#role").value = ""; $("#jd").value = ""; $("#result").innerHTML = ""; $("#steps").hidden = true;
-      setMsg(""); lastJob = null; job = null;
+      setMsg(""); lastJob = null; job = null; lastOpts = null; afterNote = "";
       const b = $('[data-act="make"]'); b.className = "primary"; b.textContent = "Make resume";
       closePanel();
     }

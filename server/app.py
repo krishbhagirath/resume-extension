@@ -665,16 +665,20 @@ class ReplaceBody(BaseModel):
     in_: str | None = Field(None, alias="in", max_length=120)   # an item id, "any", or empty/None to remove
 
 
-def _best_unused(m: dict, bank: dict, candidates: list[dict]) -> dict:
-    """The candidate item that best fits this run's posting, by the built-in matcher's bullet scores
-    (deterministic, no Claude call): the sum of its 3 best bullets."""
+def _rank_unused(m: dict, bank: dict, candidates: list[dict]) -> list[dict]:
+    """Candidate items, best fit for this run's posting first, by the built-in matcher's bullet scores
+    (deterministic, no Claude call): the sum of each item's 3 best bullets."""
     import retrieval
     job = analyzer.analyze(m["jd"], title=m.get("role", ""), company=m.get("company", ""))
     cands, _ = retrieval.score_bank(bank, job)
     by_item: dict[str, list[float]] = {}
     for c in cands:
         by_item.setdefault(c.item_id, []).append(c.score)
-    return max(candidates, key=lambda i: sum(sorted(by_item.get(i["id"], [0.0]), reverse=True)[:3]))
+    return sorted(candidates, key=lambda i: -sum(sorted(by_item.get(i["id"], [0.0]), reverse=True)[:3]))
+
+
+def _best_unused(m: dict, bank: dict, candidates: list[dict]) -> dict:
+    return _rank_unused(m, bank, candidates)[0]
 
 
 @app.post("/api/run/{run_id}/replace")
@@ -716,6 +720,118 @@ def replace_item(run_id: str, body: ReplaceBody):
     job = _rebuild(run_id, m, ov, {"kind": "item", "action": "replace", "out": body.out, "in": choice["id"],
                                    "chosen": "auto" if want == "any" else "you"})
     return job | {"replaced_with": choice}
+
+
+# ---------------------------------------------------------------- batch edits (preview before download)
+
+@app.get("/api/run/{run_id}/edit-options")
+def edit_options(run_id: str):
+    """Everything the preview editor needs in one call: per section, the items on the page with their
+    printed bullets and spare bullets (unused ones of that item), plus unused items that could come in."""
+    m = _meta(run_id)
+    bank = _bank_or_400()
+    items = _item_options(m, bank)
+    spare = _swap_options(m, bank)
+    printed: dict[str, list[dict]] = {}
+    for p in m.get("provenance") or []:
+        printed.setdefault(p["item_id"], []).append(
+            {"id": p["bullet_id"], "text": p.get("text") if p.get("rephrased") else p["source"]})
+    for sec in items.values():
+        for it in sec["on_page"]:
+            it["printed"] = printed.get(it["id"], [])
+            it["spare"] = spare.get(it["id"], [])
+    return items
+
+
+class ItemChange(BaseModel):
+    out: str = Field(max_length=120)
+    in_: str | None = Field(None, alias="in", max_length=120)   # item id, "any", or None to remove
+
+
+class BulletChange(BaseModel):
+    out: str = Field(max_length=120)
+    in_: str | None = Field(None, alias="in", max_length=120)   # bullet id of the same item, or None to remove
+
+
+class EditBody(BaseModel):
+    items: list[ItemChange] = Field(default_factory=list, max_length=20)
+    bullets: list[BulletChange] = Field(default_factory=list, max_length=40)
+
+
+@app.post("/api/run/{run_id}/edit")
+def edit_run(run_id: str, body: EditBody):
+    """Apply several changes at once and rebuild once: remove or replace any number of experiences or
+    projects ("any" = best unused fit for the posting, kept distinct within the batch) and remove or
+    swap any number of bullets inside items that stay. Earlier changes carry over. Logs one pick."""
+    m = _meta(run_id)
+    if not m.get("jd"):
+        raise HTTPException(400, "This run has no saved job description.")
+    if not body.items and not body.bullets:
+        raise HTTPException(400, "No changes to apply.")
+    bank = _bank_or_400()
+    opts = _item_options(m, bank)
+    section_of = {i["id"]: s for s, v in opts.items() for i in v["on_page"]}
+    outs = [c.out for c in body.items]
+    if len(set(outs)) != len(outs):
+        raise HTTPException(400, "Each experience or project can only be changed once per batch.")
+    for o in outs:
+        if o not in section_of:
+            raise HTTPException(400, f"{o} isn't on this resume.")
+    ov = _overrides(m)
+    changes, taken = [], set()
+    # named picks first, so "any" never takes something you asked for by name
+    for c in sorted(body.items, key=lambda c: (c.in_ or "") in ("", "any")):
+        want, sec = (c.in_ or "").strip(), section_of[c.out]
+        ov["exclude_items"] |= {c.out}
+        ov["include_items"] -= {c.out}
+        if not want:
+            changes.append({"kind": "item", "action": "remove", "out": c.out, "in": None})
+            continue
+        usable = [i for i in opts[sec]["unused"] if not i["blocked"] and i["id"] not in taken
+                  and not set(i["overlaps"]) - set(outs)]
+        if want == "any":
+            if not usable:
+                raise HTTPException(409, f"Nothing else in {sec} can take the place of {c.out}. Remove it instead.")
+            choice, chosen = _rank_unused(m, bank, usable)[0], "auto"
+        else:
+            choice, chosen = next((i for i in usable if i["id"] == want), None), "you"
+            if not choice:
+                raise HTTPException(409, f"{want} can't replace {c.out}. It must be an unused, printable item from "
+                                         "the same section, not already picked in this batch, and not the same work "
+                                         "as something staying on the page.")
+        taken.add(choice["id"])
+        ov["exclude_items"] -= {choice["id"]}
+        ov["include_items"] |= {choice["id"]}
+        changes.append({"kind": "item", "action": "replace", "out": c.out, "in": choice["id"],
+                        "chosen": chosen, "title": choice["title"]})
+    if body.bullets:
+        printed = _printed(m)
+        spare = _swap_options(m, bank)
+        b_outs = [b.out for b in body.bullets]
+        if len(set(b_outs)) != len(b_outs):
+            raise HTTPException(400, "Each bullet can only be changed once per batch.")
+        used: set[str] = set()
+        for b in body.bullets:
+            item = printed.get(b.out)
+            if not item:
+                raise HTTPException(400, f"Bullet {b.out} isn't on this resume.")
+            if item in outs:
+                raise HTTPException(409, f"Bullet {b.out} belongs to an item you're removing or replacing.")
+            ov["exclude"] |= {b.out}
+            ov["include"] -= {b.out}
+            if not b.in_:
+                changes.append({"kind": "bullet", "action": "remove", "out": b.out, "in": None})
+                continue
+            choice = next((o for o in spare.get(item, []) if o["id"] == b.in_), None)
+            if not choice or choice["blocked"] or b.in_ in used or choice["same_as"] not in (None, b.out):
+                raise HTTPException(409, f"{b.in_} can't replace {b.out}. Pick an unused, printable bullet of the "
+                                         "same item, once, that isn't another wording of a different printed bullet.")
+            used.add(b.in_)
+            ov["exclude"] -= {b.in_}
+            ov["include"] |= {b.in_}
+            changes.append({"kind": "bullet", "action": "replace", "out": b.out, "in": b.in_})
+    job = _rebuild(run_id, m, ov, {"kind": "batch", "changes": changes})
+    return job | {"changes": changes}
 
 
 @app.get("/api/pdf/{run_id}")

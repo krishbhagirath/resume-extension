@@ -179,22 +179,41 @@ def test_end_to_end_download_and_attach(browser):
     assert "Resume ready" in steps
     # nothing downloads until you click Download: first, preview what's on the page
     assert browser.sw.evaluate("chrome.downloads.search({}).then(x => x.length)") == 0
-    page.wait_for_function(f"() => {R}.querySelectorAll('#items li[data-item]').length > 0", timeout=15000)
-    before = page.evaluate(f"[...{R}.querySelectorAll('#items li[data-item]')].map(li => li.dataset.item)")
-    # replace one experience/project with another from the same section, before downloading
-    out = page.evaluate(f"""() => {{
-      const b = {R}.querySelector('#items [data-act=replace]'); b.click(); return b.dataset.item; }}""")
-    page.evaluate(f"{R}.querySelector('#items [data-act=doReplace]').click()")
-    items_now = f"[...{R}.querySelectorAll('#items li[data-item]')].map(li => li.dataset.item)"
+    cards = f"[...{R}.querySelectorAll('#editor .card')].map(c => c.dataset.item)"
+    page.wait_for_function(f"() => {cards}.length > 1", timeout=15000)
+    before = page.evaluate(cards)
+    # several changes at once: replace one item (best fit, or remove if nothing can replace it) and remove a
+    # bullet in a different item; the apply bar counts them and Download waits
+    plan = page.evaluate(f"""() => {{
+      const R = {R};
+      const set = (sel, v) => {{ sel.value = v; sel.dispatchEvent(new Event('change', {{bubbles: true}})); }};
+      const cs = [...R.querySelectorAll('#editor .card')];
+      const isel = cs[0].querySelector('select[data-kind=item]');
+      const how = [...isel.options].some(o => o.value === 'any') ? 'any' : 'remove';
+      set(isel, how);
+      cs[1].querySelector('[data-act=toggleBullets]').click();
+      const bsel = cs[1].querySelector('select[data-kind=bullet]');
+      set(bsel, 'remove');
+      return {{ out: cs[0].dataset.item, bullet: bsel.dataset.out, how,
+               bar: R.querySelector('#nchanges').textContent, barHidden: R.querySelector('#applybar').hidden,
+               dlDisabled: R.querySelector('[data-act=download]').disabled,
+               locked: [...cs[0].querySelectorAll('select[data-kind=bullet]')].every(b => b.disabled) }};
+    }}""")
+    assert plan["bar"] == "2 changes" and not plan["barHidden"] and plan["dlDisabled"] and plan["locked"], plan
+    page.evaluate(f"{R}.querySelector('[data-act=applyEdits]').click()")
     page.wait_for_function(f"() => /^Ready:/.test({R}.querySelector('#msg').textContent) "
-                           f"&& {items_now}.length > 0 && !{items_now}.includes({json.dumps(out)})", timeout=120000)
-    after = page.evaluate(f"[...{R}.querySelectorAll('#items li[data-item]')].map(li => li.dataset.item)")
-    assert out in before and out not in after, (before, after)
-    # remove an item outright: it rebuilds and shows the preview again, still nothing downloaded
-    gone = page.evaluate(f"""() => {{
-      const b = {R}.querySelector('#items [data-act=remove]'); b.click(); return b.dataset.item; }}""")
-    page.wait_for_function(f"() => /^Ready:/.test({R}.querySelector('#msg').textContent) "
-                           f"&& {items_now}.length > 0 && !{items_now}.includes({json.dumps(gone)})", timeout=120000)
+                           f"&& {cards}.length > 0 && !{cards}.includes({json.dumps(plan['out'])})", timeout=120000)
+    after = page.evaluate(cards)
+    bullets_now = page.evaluate(f"[...{R}.querySelectorAll('#editor li[data-bullet]')].map(li => li.dataset.bullet)")
+    assert plan["out"] in before and plan["out"] not in after, (before, after)
+    assert plan["bullet"] not in bullets_now
+    # Reset clears pending changes and turns Download back on
+    page.evaluate(f"""() => {{
+      const sel = {R}.querySelector('#editor select[data-kind=item]');
+      sel.value = 'remove'; sel.dispatchEvent(new Event('change', {{bubbles: true}}));
+      {R}.querySelector('[data-act=resetEdits]').click(); }}""")
+    assert page.evaluate(f"{R}.querySelector('#applybar').hidden") is True
+    assert page.evaluate(f"{R}.querySelector('[data-act=download]').disabled") is False
     assert browser.sw.evaluate("chrome.downloads.search({}).then(x => x.length)") == 0
     page.evaluate(f"{R}.querySelector('[data-act=download]').click()")
     page.wait_for_function(f"() => /^Downloaded/.test({R}.querySelector('#msg').textContent)", timeout=15000)

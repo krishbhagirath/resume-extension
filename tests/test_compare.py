@@ -325,3 +325,50 @@ def test_remove_item_and_replace_with_best_fit(client, small_bank):
 
     # removing something that isn't on the page is refused
     assert client.post(f"/api/run/{base['id']}/replace", json={"out": "web", "in": None}).status_code == 400
+
+
+@needs_tex
+def test_batch_edit_items_and_bullets_at_once(client, small_bank):
+    bigger_bank(client, small_bank)
+    base = finish(client, client.post("/api/jobs", json={"jd": JDS["backend"], "company": "X", "role": "Y"}).json())
+    opts = client.get(f"/api/run/{base['id']}/edit-options").json()
+    exp = opts["experiences"]["on_page"]
+    assert all(it["printed"] and "spare" in it for it in exp)
+    assert {b["id"] for it in exp for b in it["printed"]} <= {p["bullet_id"] for p in base["provenance"]}
+    out = next(it["id"] for it in exp if it["id"] != "lab")
+    other = next(it for s in ("experiences", "projects") for it in opts[s]["on_page"] if it["id"] != out)
+    gone_bullet = other["printed"][0]["id"]
+    swap = next(((b["id"], o["id"]) for b in other["printed"][1:] for o in other["spare"]
+                 if not o["blocked"] and o["same_as"] in (None, b["id"])), None)
+    edit = {"items": [{"out": out, "in": "any"}],
+            "bullets": [{"out": gone_bullet, "in": None}] + ([{"out": swap[0], "in": swap[1]}] if swap else [])}
+
+    # refusals
+    url = f"/api/run/{base['id']}/edit"
+    assert client.post(url, json={}).status_code == 400
+    assert client.post(url, json={"items": [{"out": out, "in": None}, {"out": out, "in": "any"}]}).status_code == 400
+    assert client.post(url, json={"items": [{"out": out, "in": None}],
+                                  "bullets": [{"out": next(p["bullet_id"] for p in base["provenance"]
+                                                           if p["item_id"] == out), "in": None}]}).status_code == 409
+    both = [i["id"] for i in exp]
+    if len(both) == 2:
+        target = next(u["id"] for u in opts["experiences"]["unused"] if not u["blocked"] and not u["overlaps"])
+        r = client.post(url, json={"items": [{"out": both[0], "in": target}, {"out": both[1], "in": target}]})
+        assert r.status_code == 409   # the same item can't come in twice
+
+    r = client.post(url, json=edit)
+    assert r.status_code == 200, r.text
+    chosen = next(c for c in r.json()["changes"] if c["kind"] == "item")["in"]
+    new = finish(client, r.json())
+    items_now = [e["id"] for e in new["selection"]["experiences"] if e["bullet_ids"]]
+    bullets_now = {p["bullet_id"] for p in new["provenance"]}
+    assert out not in items_now and chosen in items_now
+    assert gone_bullet not in bullets_now and new["validation"]["one_page"]
+    if swap:
+        assert swap[0] not in bullets_now and swap[1] in bullets_now
+    assert out in new["overrides"]["exclude_items"] and chosen in new["overrides"]["include_items"]
+    assert gone_bullet in new["overrides"]["exclude"]
+    [row] = picks_rows(client.out)       # one pick for the whole batch
+    assert row["swap"]["kind"] == "batch" and set(row["reasons"]) == {"projects", "bullets"}
+    assert len(row["swap"]["changes"]) == len(edit["items"]) + len(edit["bullets"])
+    assert row["swap"]["applied"] is True and all(c["applied"] for c in row["swap"]["changes"])

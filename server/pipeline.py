@@ -234,6 +234,18 @@ class JobStore:
             return
         try:
             old = json.loads(f.read_text(encoding="utf-8"))
+            if swap.get("kind") == "batch":   # several changes applied at once (preview editor)
+                sel = new_meta.get("selection") or {}
+                items_now = {e["id"] for s in ("experiences", "projects") for e in sel.get(s, []) if e.get("bullet_ids")}
+                bullets_now = {b["id"] for b in new_meta.get("bullet_scores", [])}
+                done = []
+                for c in swap.get("changes", []):
+                    now = items_now if c["kind"] == "item" else bullets_now
+                    done.append({**c, "applied": (c["in"] in now) if c.get("in") else (c["out"] not in now)})
+                reasons = [r for r, k in (("projects", "item"), ("bullets", "bullet")) if any(c["kind"] == k for c in done)]
+                picks.append(self.out, old, new_meta, "b", reasons, "swap",
+                             swap={"kind": "batch", "changes": done, "applied": all(c["applied"] for c in done)})
+                return
             if swap.get("kind") == "item":   # a whole experience/project replaced
                 sel = new_meta.get("selection") or {}
                 printed = {e["id"] for s in ("experiences", "projects") for e in sel.get(s, []) if e.get("bullet_ids")}

@@ -124,11 +124,11 @@ async function handle(msg, sender) {
       const job = await api(`/api/jobs/${encodeURIComponent(msg.id)}`);
       return { ok: true, download: await downloadJob(job, true) };
     }
-    case "runItems":
-      return { ok: true, items: await api(`/api/run/${encodeURIComponent(msg.runId)}/items`) };
-    case "replaceItem": {
-      const job = await api(`/api/run/${encodeURIComponent(msg.runId)}/replace`,
-        { method: "POST", body: JSON.stringify({ out: msg.out, in: msg.in }) });
+    case "editOptions":
+      return { ok: true, items: await api(`/api/run/${encodeURIComponent(msg.runId)}/edit-options`) };
+    case "applyEdits": {
+      const job = await api(`/api/run/${encodeURIComponent(msg.runId)}/edit`,
+        { method: "POST", body: JSON.stringify({ items: msg.items || [], bullets: msg.bullets || [] }) });
       await chrome.storage.session.set({ ["active:" + tabId]: { id: job.id, url: msg.url || "", at: Date.now() } });
       return { ok: true, job };
     }
