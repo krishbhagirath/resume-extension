@@ -281,7 +281,7 @@ def test_replace_whole_item_before_download(client, small_bank):
     assert new["overrides"]["exclude_items"] == [out] and new["overrides"]["include_items"] == [new_in]
     [row] = picks_rows(client.out)
     assert row["source"] == "swap" and row["reasons"] == ["projects"] and row["winner"] == "b"
-    assert row["swap"] == {"kind": "item", "out": out, "in": new_in, "applied": True}
+    assert row["swap"] == {"kind": "item", "out": out, "in": new_in, "applied": True, "action": "replace", "chosen": "you"}
 
     # a later bullet swap keeps the replacement
     opts = client.get(f"/api/run/{new['id']}/swap-options").json()
@@ -292,3 +292,36 @@ def test_replace_whole_item_before_download(client, small_bank):
         after = finish(client, client.post(f"/api/run/{new['id']}/swap", json={"out": pair[0], "in": pair[1]}).json())
         assert after["overrides"]["exclude_items"] == [out] and after["overrides"]["include_items"] == [new_in]
         assert out not in [e["id"] for e in after["selection"]["experiences"] if e["bullet_ids"]]
+
+
+@needs_tex
+def test_remove_item_and_replace_with_best_fit(client, small_bank):
+    bigger_bank(client, small_bank)
+    base = finish(client, client.post("/api/jobs", json={"jd": JDS["backend"], "company": "X", "role": "Y"}).json())
+    items = client.get(f"/api/run/{base['id']}/items").json()
+    on_exp = [i["id"] for i in items["experiences"]["on_page"]]
+    out = next(i for i in on_exp if i != "lab")
+
+    # remove: the item is gone and nothing is forced in; the space goes to whatever fits best
+    gone = finish(client, client.post(f"/api/run/{base['id']}/replace", json={"out": out, "in": None}).json())
+    assert out not in [e["id"] for e in gone["selection"]["experiences"] if e["bullet_ids"]]
+    assert gone["overrides"]["exclude_items"] == [out] and gone["overrides"]["include_items"] == []
+    assert gone["validation"]["one_page"]
+    row = picks_rows(client.out)[-1]
+    assert row["swap"]["action"] == "remove" and row["swap"]["in"] is None and row["swap"]["applied"] is True
+    assert row["reasons"] == ["projects"]
+
+    # "any": the server picks the unused item that best fits the posting, never one overlapping a different printed item
+    r = client.post(f"/api/run/{base['id']}/replace", json={"out": out, "in": "any"})
+    assert r.status_code == 200, r.text
+    chosen = r.json()["replaced_with"]
+    assert chosen["section"] == "experiences" and chosen["id"] not in on_exp
+    assert not set(chosen["overlaps"]) - {out}
+    new = finish(client, r.json())
+    now = [e["id"] for e in new["selection"]["experiences"] if e["bullet_ids"]]
+    assert out not in now and chosen["id"] in now
+    row = picks_rows(client.out)[-1]
+    assert row["swap"]["chosen"] == "auto" and row["swap"]["in"] == chosen["id"]
+
+    # removing something that isn't on the page is refused
+    assert client.post(f"/api/run/{base['id']}/replace", json={"out": "web", "in": None}).status_code == 400

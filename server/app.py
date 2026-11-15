@@ -660,30 +660,62 @@ def run_items(run_id: str):
     return _item_options(_meta(run_id), _bank_or_400())
 
 
+class ReplaceBody(BaseModel):
+    out: str = Field(max_length=120)
+    in_: str | None = Field(None, alias="in", max_length=120)   # an item id, "any", or empty/None to remove
+
+
+def _best_unused(m: dict, bank: dict, candidates: list[dict]) -> dict:
+    """The candidate item that best fits this run's posting, by the built-in matcher's bullet scores
+    (deterministic, no Claude call): the sum of its 3 best bullets."""
+    import retrieval
+    job = analyzer.analyze(m["jd"], title=m.get("role", ""), company=m.get("company", ""))
+    cands, _ = retrieval.score_bank(bank, job)
+    by_item: dict[str, list[float]] = {}
+    for c in cands:
+        by_item.setdefault(c.item_id, []).append(c.score)
+    return max(candidates, key=lambda i: sum(sorted(by_item.get(i["id"], [0.0]), reverse=True)[:3]))
+
+
 @app.post("/api/run/{run_id}/replace")
-def replace_item(run_id: str, body: SwapBody):
-    """Rebuilds this resume with one experience/project replaced by another from the same section.
-    Earlier swaps carry over. Logs a pick when it finishes (reason: projects)."""
+def replace_item(run_id: str, body: ReplaceBody):
+    """Rebuilds this resume without one experience/project. `in` picks what takes its place: an item id
+    from the same section, "any" for the unused one that best fits the posting, or nothing to just remove
+    it (the freed space goes to whatever fits best). Earlier changes carry over. Logs a pick when done."""
     m = _meta(run_id)
     if not m.get("jd"):
         raise HTTPException(400, "This run has no saved job description.")
-    opts = _item_options(m, _bank_or_400())
+    bank = _bank_or_400()
+    opts = _item_options(m, bank)
     section = next((s for s, v in opts.items() if any(i["id"] == body.out for i in v["on_page"])), None)
     if not section:
         raise HTTPException(400, "That experience or project isn't on this resume.")
-    choice = next((i for i in opts[section]["unused"] if i["id"] == body.in_), None)
-    if not choice:
-        raise HTTPException(409, "Pick an unused, visible item from the same section of your current bank.")
-    if choice["blocked"]:
-        raise HTTPException(409, "Every bullet of that item leaves a word or two on its last line, and strict lines "
-                                 "is on, so it can't be printed. Fix it in the bank first.")
-    if set(choice["overlaps"]) - {body.out}:
-        raise HTTPException(409, f"That describes the same work as {', '.join(choice['overlaps'])}, which is already "
-                                 "on the page. Replace that one instead.")
     ov = _overrides(m)
-    ov["exclude_items"] = (ov["exclude_items"] - {body.in_}) | {body.out}
-    ov["include_items"] = (ov["include_items"] - {body.out}) | {body.in_}
-    return _rebuild(run_id, m, ov, {"kind": "item", "out": body.out, "in": body.in_})
+    ov["exclude_items"] = ov["exclude_items"] | {body.out}
+    ov["include_items"] = ov["include_items"] - {body.out}
+    want = (body.in_ or "").strip()
+    if not want:   # just remove it
+        return _rebuild(run_id, m, ov, {"kind": "item", "action": "remove", "out": body.out, "in": None})
+    usable = [i for i in opts[section]["unused"] if not i["blocked"] and not set(i["overlaps"]) - {body.out}]
+    if want == "any":
+        if not usable:
+            raise HTTPException(409, "Nothing else in this section can take its place. Remove it instead.")
+        choice = _best_unused(m, bank, usable)
+    else:
+        choice = next((i for i in opts[section]["unused"] if i["id"] == want), None)
+        if not choice:
+            raise HTTPException(409, "Pick an unused, visible item from the same section of your current bank.")
+        if choice["blocked"]:
+            raise HTTPException(409, "Every bullet of that item leaves a word or two on its last line, and strict "
+                                     "lines is on, so it can't be printed. Fix it in the bank first.")
+        if set(choice["overlaps"]) - {body.out}:
+            raise HTTPException(409, f"That describes the same work as {', '.join(choice['overlaps'])}, which is "
+                                     "already on the page. Replace that one instead.")
+    ov["exclude_items"] -= {choice["id"]}
+    ov["include_items"] |= {choice["id"]}
+    job = _rebuild(run_id, m, ov, {"kind": "item", "action": "replace", "out": body.out, "in": choice["id"],
+                                   "chosen": "auto" if want == "any" else "you"})
+    return job | {"replaced_with": choice}
 
 
 @app.get("/api/pdf/{run_id}")

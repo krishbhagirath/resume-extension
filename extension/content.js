@@ -324,9 +324,26 @@
       return `<h3>${label}</h3><ul>${s.on_page.map((/** @type {any} */ it) => `
         <li data-item="${esc(it.id)}"><div class="it"><span class="nm">${esc(it.title)}${it.org ? ` <small>${esc(it.org)}</small>` : ""}</span>
           <small>${it.bullets} bullet${it.bullets === 1 ? "" : "s"}</small>
-          ${s.unused.length ? `<button class="link" data-act="replace" data-section="${key}" data-item="${esc(it.id)}">Replace</button>` : ""}</div>
+          ${s.unused.length ? `<button class="link" data-act="replace" data-section="${key}" data-item="${esc(it.id)}">Replace</button>` : ""}
+          <button class="link" data-act="remove" data-item="${esc(it.id)}" title="Leave it off; the space goes to whatever fits best">Remove</button></div>
           <div class="rep" hidden></div></li>`).join("")}</ul>`;
     }).join("") || "Nothing listed.";
+    box.insertAdjacentHTML("afterbegin", '<small>Remove or replace anything below; the resume rebuilds and you see it again before downloading.</small>');
+  }
+
+  /** Rebuild without an item. `inId`: a specific item, "any" (best fit for this job), or "" to just remove it.
+   * @param {string} out @param {string} inId */
+  async function rebuildWithout(out, inId) {
+    if (polling || !lastJob) return;
+    const name = (/** @param {string} id */ (id) => {
+      for (const s of Object.values(lastItems || {})) for (const it of [...s.on_page, ...s.unused]) if (it.id === id) return it.title;
+      return id;
+    });
+    setMsg(`<span class="spin"></span> ${inId === "" ? `Removing ${esc(name(out))}`
+      : inId === "any" ? `Replacing ${esc(name(out))} with the best fit for this job` : `Replacing ${esc(name(out))} with ${esc(name(inId))}`}…`);
+    const r = await send({ type: "replaceItem", runId: lastJob.result.run_id, out, in: inId, url: location.href });
+    if (!r.ok) return setMsg(esc(r.error), "err");
+    await follow(r.job.id);
   }
 
   /** @param {HTMLElement} btn */
@@ -337,26 +354,22 @@
     const out = btn.dataset.item || "", section = btn.dataset.section || "";
     // an item describing the same work as a different one on the page can't come in here
     const rows = (lastItems?.[section]?.unused || []).filter((/** @type {any} */ u) => u.overlaps.every((/** @type {string} */ o) => o === out));
+    const usable = rows.filter((/** @type {any} */ u) => !u.blocked);
     rep.innerHTML = rows.length ? `
-      <select aria-label="Use this instead">${rows.map((/** @type {any} */ u) =>
+      <select aria-label="Replace with">
+        ${usable.length ? '<option value="any">Best fit for this job (let it choose)</option>' : ""}
+        ${rows.map((/** @type {any} */ u) =>
         `<option value="${esc(u.id)}" ${u.blocked ? "disabled" : ""}>${esc(u.title)}${u.org ? `, ${esc(u.org)}` : ""}${u.blocked ? " (short last lines: can't print)" : ""}</option>`).join("")}</select>
-      <button class="secondary" data-act="doReplace" data-item="${esc(out)}">Use this instead (rebuilds the resume)</button>`
-      : "<small>Nothing else in this section can replace it.</small>";
-    const sel = rep.querySelector("select");
-    const first = rows.find((/** @type {any} */ u) => !u.blocked);
-    if (sel && first) sel.value = first.id;
+      <button class="secondary" data-act="doReplace" data-item="${esc(out)}">Replace and rebuild</button>`
+      : "<small>Nothing else in this section can replace it. Use Remove to just leave it off.</small>";
     rep.hidden = false;
   }
 
   /** @param {HTMLElement} btn */
   async function doReplace(btn) {
-    if (polling || !lastJob) return;
     const sel = /** @type {HTMLSelectElement | null} */ (btn.closest(".rep")?.querySelector("select") || null);
     if (!sel?.value || sel.selectedOptions[0]?.disabled) return;
-    setMsg('<span class="spin"></span> Rebuilding with your change…');
-    const r = await send({ type: "replaceItem", runId: lastJob.result.run_id, out: btn.dataset.item, in: sel.value, url: location.href });
-    if (!r.ok) return setMsg(esc(r.error), "err");
-    await follow(r.job.id);
+    await rebuildWithout(btn.dataset.item || "", sel.value);
   }
 
   const ICON = { completed: "✓", failed: "✕", cancelled: "✕" };
@@ -414,6 +427,7 @@
     }
     if (act === "replace") openReplace(/** @type {HTMLElement} */ (/** @type {HTMLElement} */ (e.target).closest("[data-act]")));
     if (act === "doReplace") doReplace(/** @type {HTMLElement} */ (/** @type {HTMLElement} */ (e.target).closest("[data-act]")));
+    if (act === "remove") rebuildWithout(/** @type {HTMLElement} */ (/** @type {HTMLElement} */ (e.target).closest("[data-act]")).dataset.item || "", "");
     if (act === "openPdf" && lastJob) send({ type: "openRun", runId: lastJob.result.run_id, kind: "pdf" });
     if (act === "overleaf" && lastJob) send({ type: "openRun", runId: lastJob.result.run_id, kind: "overleaf" });
     if (act === "openApp") send({ type: "openApp" });

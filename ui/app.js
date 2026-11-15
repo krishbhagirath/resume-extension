@@ -298,6 +298,8 @@ function showRun(run, opts = {}) {
     if (out) openSwap(run, out, e.target.closest("li"));
     const item = e.target.dataset?.replace;
     if (item) openReplace(run, item, e.target.closest(".item"));
+    const gone = e.target.dataset?.remove;
+    if (gone) rebuildWithout(run, gone, "");
   });
   $("#regen").addEventListener("click", async () => {
     $("#jd").value = $("#jd").value || run.jd || "";
@@ -355,22 +357,28 @@ async function openReplace(run, out, itemEl) {
   const section = ["experiences", "projects"].find((s) => opts[s].on_page.some((i) => i.id === out));
   // an item describing the same work as a different one on the page can't come in here
   const rows = section ? opts[section].unused.filter((u) => u.overlaps.every((o) => o === out)) : [];
-  if (!rows.length) { box.innerHTML = '<span class="hint">Nothing else in this section can replace it.</span>'; return; }
-  box.innerHTML = `<select aria-label="Use this instead">${rows.map((u) =>
+  if (!rows.length) { box.innerHTML = '<span class="hint">Nothing else in this section can replace it. Use Remove to just leave it off.</span>'; return; }
+  const usable = rows.filter((u) => !u.blocked);
+  box.innerHTML = `<select aria-label="Replace with">
+      ${usable.length ? '<option value="any">Best fit for this job (let it choose)</option>' : ""}
+      ${rows.map((u) =>
       `<option value="${esc(u.id)}" ${u.blocked ? "disabled" : ""}>${esc(u.title)}${u.org ? ", " + esc(u.org) : ""} (${u.bullets} bullet${u.bullets === 1 ? "" : "s"})${u.blocked ? ": short last lines, can't print" : ""}</option>`).join("")}</select>
-    <button class="quiet" type="button">Use this instead</button>
-    <span class="hint">Rebuilds the resume and saves your choice as a pick.</span>`;
+    <button class="quiet" type="button">Replace and rebuild</button>
+    <span class="hint">Your choice is saved as a pick.</span>`;
   const sel = box.querySelector("select");
-  const firstOk = rows.find((u) => !u.blocked);
-  if (firstOk) sel.value = firstOk.id;
-  box.querySelector("button").addEventListener("click", async () => {
-    if (currentJob || !sel.value || sel.selectedOptions[0]?.disabled) return;
-    $("#err").textContent = "";
-    setBusy(true);
-    try {
-      await follow(await api(`/api/run/${encodeURIComponent(run.id)}/replace`, { method: "POST", body: JSON.stringify({ out, in: sel.value }) }));
-    } catch (e) { $("#err").textContent = e.message; } finally { setBusy(false); }
+  box.querySelector("button").addEventListener("click", () => {
+    if (sel.value && !sel.selectedOptions[0]?.disabled) rebuildWithout(run, out, sel.value);
   });
+}
+
+// inId: an item id, "any" (best fit for this job), or "" to just remove it.
+async function rebuildWithout(run, out, inId) {
+  if (currentJob) return;
+  $("#err").textContent = "";
+  setBusy(true);
+  try {
+    await follow(await api(`/api/run/${encodeURIComponent(run.id)}/replace`, { method: "POST", body: JSON.stringify({ out, in: inId || null }) }));
+  } catch (e) { $("#err").textContent = e.message; } finally { setBusy(false); }
 }
 
 function provenanceHtml(run) {
@@ -379,7 +387,7 @@ function provenanceHtml(run) {
   for (const p of prov) { if (!byItem.has(p.item_id)) byItem.set(p.item_id, []); byItem.get(p.item_id).push(p); }
   const titles = Object.fromEntries((Bank.data ? [...Bank.data.experiences, ...Bank.data.projects] : []).map((i) => [i.id, i.title + (i.org ? ", " + i.org : "")]));
   const items = [...byItem.entries()].map(([id, rows]) => `
-    <div class="item"><h4>${esc(titles[id] || id)}<button class="ghost swap" type="button" data-replace="${esc(id)}" title="Replace this whole item with another from the same section">Replace</button></h4><ul>${rows.map((p) => `
+    <div class="item"><h4>${esc(titles[id] || id)}<button class="ghost swap" type="button" data-replace="${esc(id)}" title="Replace this whole item with another from the same section">Replace</button><button class="ghost swap" type="button" data-remove="${esc(id)}" title="Leave this item off; the space goes to whatever fits best">Remove</button></h4><ul>${rows.map((p) => `
       <li>${esc(p.rephrased ? p.text.replace(/\*\*/g, "") : p.source)}<button class="ghost swap" type="button" data-swap="${esc(p.bullet_id)}" title="Replace this with another bullet from the same item">Swap</button><span class="tag">${p.rephrased ? "reworded · checked" : "your wording"} · ${esc(p.bullet_id)}${p.lines ? ` · ${p.lines} line${p.lines > 1 ? "s" : ""}` : ""}</span>${p.short_last_line ? `<span class="chip warn">last line ${Math.round(p.last_fill * 100)}% full</span>` : ""}
       ${p.rephrased ? `<div class="rej">Original: ${esc(p.source)}</div>` : ""}
       ${p.rejected ? `<div class="rej">Rejected rewording: “${esc(p.rejected_text)}” (${esc((p.reasons || []).join("; "))})</div>` : ""}</li>`).join("")}</ul></div>`).join("");

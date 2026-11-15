@@ -241,9 +241,11 @@ class JobStore:
             else:
                 printed = {b["id"] for b in new_meta.get("bullet_scores", [])}
                 reasons = ["bullets"]
+            # applied: the change really shows (new item printed, or a removed item really gone)
+            applied = swap.get("in") in printed if swap.get("in") else swap.get("out") not in printed
             picks.append(self.out, old, new_meta, "b", reasons, "swap",
                          swap={"kind": swap.get("kind", "bullet"), "out": swap.get("out"), "in": swap.get("in"),
-                               "applied": swap.get("in") in printed})
+                               "applied": applied, **{k: swap[k] for k in ("action", "chosen") if k in swap}})
         except Exception:
             self._log(Job(id="-", key="-"), "pick_log_failed", trace=traceback.format_exc()[-1500:])
 

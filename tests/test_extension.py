@@ -190,6 +190,11 @@ def test_end_to_end_download_and_attach(browser):
                            f"&& {items_now}.length > 0 && !{items_now}.includes({json.dumps(out)})", timeout=120000)
     after = page.evaluate(f"[...{R}.querySelectorAll('#items li[data-item]')].map(li => li.dataset.item)")
     assert out in before and out not in after, (before, after)
+    # remove an item outright: it rebuilds and shows the preview again, still nothing downloaded
+    gone = page.evaluate(f"""() => {{
+      const b = {R}.querySelector('#items [data-act=remove]'); b.click(); return b.dataset.item; }}""")
+    page.wait_for_function(f"() => /^Ready:/.test({R}.querySelector('#msg').textContent) "
+                           f"&& {items_now}.length > 0 && !{items_now}.includes({json.dumps(gone)})", timeout=120000)
     assert browser.sw.evaluate("chrome.downloads.search({}).then(x => x.length)") == 0
     page.evaluate(f"{R}.querySelector('[data-act=download]').click()")
     page.wait_for_function(f"() => /^Downloaded/.test({R}.querySelector('#msg').textContent)", timeout=15000)
