@@ -53,8 +53,9 @@ def resume_features(bullets: list[dict]) -> np.ndarray:
     return f
 
 
-def load_picks(path: Path) -> tuple[list[dict], dict]:
-    rows, skipped = [], {"unreadable": 0, "no_bullet_scores": 0, "identical": 0}
+def load_picks(path: Path, sources: set[str] | None = None) -> tuple[list[dict], dict]:
+    """sources: only picks from these sources (compare / swap / judge); None = all."""
+    rows, skipped = [], {"unreadable": 0, "no_bullet_scores": 0, "identical": 0, "other_source": 0}
     if not path.exists():
         return rows, skipped
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -66,6 +67,9 @@ def load_picks(path: Path) -> tuple[list[dict], dict]:
             winner = r["winner"]
         except (json.JSONDecodeError, KeyError, TypeError):
             skipped["unreadable"] += 1
+            continue
+        if sources and r.get("source", "?") not in sources:
+            skipped["other_source"] += 1
             continue
         if not ba or not bb or winner not in ("a", "b"):
             skipped["no_bullet_scores"] += 1     # runs made before per-bullet scores were saved
@@ -160,12 +164,16 @@ def main(argv=None) -> int:
                     help="don't write weights from fewer usable picks than this (default 15)")
     ap.add_argument("--C", type=float, default=1.0, help="inverse regularization strength (default 1.0)")
     ap.add_argument("--dry-run", action="store_true", help="report only, never write")
+    ap.add_argument("--source", default="",
+                    help="only picks from these sources, comma-separated: compare, swap, judge (default: all)")
     a = ap.parse_args(argv)
 
-    rows, skipped = load_picks(a.picks)
-    print(f"Picks file: {a.picks}")
+    sources = {s.strip() for s in a.source.split(",") if s.strip()} or None
+    rows, skipped = load_picks(a.picks, sources)
+    print(f"Picks file: {a.picks}" + (f"  (sources: {', '.join(sorted(sources))})" if sources else ""))
     print(f"Usable picks: {len(rows)}  (skipped: {skipped['identical']} identical, "
-          f"{skipped['no_bullet_scores']} without per-bullet scores, {skipped['unreadable']} unreadable)")
+          f"{skipped['no_bullet_scores']} without per-bullet scores, {skipped['unreadable']} unreadable"
+          + (f", {skipped['other_source']} from other sources" if sources else "") + ")")
     if len(rows) < 2:
         print("Not enough picks to learn anything yet. Use Make 2 versions / Swap and pick a few dozen times.")
         return 1
