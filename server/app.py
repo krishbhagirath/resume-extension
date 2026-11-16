@@ -802,6 +802,7 @@ def _apply_changes(m: dict, bank: dict, body: "EditBody") -> tuple[dict[str, set
         usable = [i for i in opts[sec]["unused"] if not i["blocked"] and i["id"] not in taken
                   and not set(i["overlaps"]) - set(outs)]
         if want == "any":
+            usable = [i for i in usable if i["id"] not in ov["exclude_items"]]   # never brings back what you took off
             if not usable:
                 raise HTTPException(409, f"Nothing else in {sec} can take the place of {c.out}. Remove it instead.")
             choice, chosen = _rank_unused(m, bank, usable)[0], "auto"
@@ -865,7 +866,19 @@ def get_draft(draft_id: str):
     return _draft_payload(_draft_or_404(draft_id), _bank_or_400())
 
 
+class AddItem(BaseModel):
+    section: Literal["experiences", "projects"]
+    in_: str = Field("any", alias="in", max_length=120)   # an unused item id, or "any" for the best fit
+
+
+class AddBullet(BaseModel):
+    item: str = Field(max_length=120)
+    in_: str = Field("any", alias="in", max_length=120)   # an unused bullet of that item, or "any" for the best fit
+
+
 class DraftEdit(EditBody):
+    add: list[AddItem] | None = None                      # put more experiences/projects on the page
+    add_bullets: list[AddBullet] | None = None            # put one more point under an item
     order: dict[str, list[str]] | None = None             # {"experiences": [ids], "projects": [ids]}
     bullet_order: dict[str, list[str]] | None = None      # {item id: [bullet ids]}
     texts: dict[str, str | None] | None = None            # {bullet id: your wording, or null to undo}
@@ -880,6 +893,10 @@ def edit_draft(draft_id: str, body: DraftEdit):
     if body.items or body.bullets:
         ov, changes = _apply_changes(d, bank, body)
         d["overrides"] = {k: sorted(v) for k, v in ov.items()}
+    for a in body.add or []:
+        changes.append(_add_to_draft(d, bank, a))
+    for a in body.add_bullets or []:
+        changes.append(_add_bullet_to_draft(d, bank, a))
     printed = {p["bullet_id"] for p in d["provenance"]}
     if body.texts:
         for bid, text in body.texts.items():
@@ -912,13 +929,81 @@ def edit_draft(draft_id: str, body: DraftEdit):
     return _draft_payload(d, bank)
 
 
+def _add_to_draft(d: dict, bank: dict, a: "AddItem") -> dict:
+    """Put one more experience/project on the page (a named one, or the best unused fit). The items already
+    showing in that section are kept, and if the section is at its limit the limit goes up by one for this
+    resume; the page budget then takes the room from bullets and the other section to stay on one page."""
+    opts = _item_options(d, bank)
+    usable = [u for u in opts[a.section]["unused"] if not u["blocked"] and not u["overlaps"]]
+    removed = set(d["overrides"].get("exclude_items") or [])
+    want = (a.in_ or "any").strip()
+    if want == "any":
+        usable = [u for u in usable if u["id"] not in removed]   # never brings back what you took off
+        if not usable:
+            raise HTTPException(409, f"Nothing else in {a.section} can be added: everything left is hidden, can't "
+                                     "print, or is the same work as something already on the page.")
+        choice, chosen = _rank_unused(d, bank, usable)[0], "auto"
+    else:
+        choice, chosen = next((u for u in usable if u["id"] == want), None), "you"
+        if not choice:
+            raise HTTPException(409, f"{want} can't be added: pick an unused, printable item from {a.section} that "
+                                     "isn't the same work as something already on the page.")
+    ov = d["overrides"]
+    # keep what you can already see in this section: the room comes from bullets and other sections instead
+    keep = {i["id"] for i in opts[a.section]["on_page"]}
+    ov["include_items"] = sorted(set(ov.get("include_items") or []) | keep | {choice["id"]})
+    ov["exclude_items"] = sorted(set(ov.get("exclude_items") or []) - {choice["id"]})
+    count = len(opts[a.section]["on_page"])
+    key = "max_experiences" if a.section == "experiences" else "max_projects"
+    limit = int((d.get("limits") or {}).get(a.section) or bank.get("settings", {}).get(key, 3))
+    if count + 1 > limit:
+        d.setdefault("limits", {})[a.section] = count + 1
+    return {"kind": "item", "action": "add", "out": None, "in": choice["id"], "chosen": chosen, "title": choice["title"]}
+
+
+def _add_bullet_to_draft(d: dict, bank: dict, a: "AddBullet") -> dict:
+    """One more point under an item on the page: a named unused bullet of that item, or its best one.
+    The item and its current points stay; if it's at the per-item limit, the limit goes up by one for this
+    item; the page budget takes the room from other items."""
+    printed = _printed(d)
+    on_item = [b for b, i in printed.items() if i == a.item]
+    if not on_item:
+        raise HTTPException(400, f"{a.item} isn't on this resume.")
+    spare = [o for o in _swap_options(d, bank).get(a.item, []) if not o["blocked"] and not o["same_as"]]
+    removed = set(d["overrides"].get("exclude") or [])
+    want = (a.in_ or "any").strip()
+    if want == "any":
+        spare = [o for o in spare if o["id"] not in removed]   # never brings back what you took off
+        if not spare:
+            raise HTTPException(409, "That item has no other points left to add (unused, printable, and not "
+                                     "another wording of one already shown).")
+        import retrieval
+        job = analyzer.analyze(d["jd"], title=d.get("role", ""), company=d.get("company", ""))
+        score = {c.bullet_id: c.score for c in retrieval.score_bank(bank, job, d.get("llm_rank") or None)[0]}
+        choice, chosen = max(spare, key=lambda o: score.get(o["id"], 0.0)), "auto"
+    else:
+        choice, chosen = next((o for o in spare if o["id"] == want), None), "you"
+        if not choice:
+            raise HTTPException(409, f"{want} can't be added to {a.item}: pick an unused, printable point of that "
+                                     "item that isn't another wording of one already shown.")
+    ov = d["overrides"]
+    ov["include"] = sorted(set(ov.get("include") or []) | set(on_item) | {choice["id"]})
+    ov["exclude"] = sorted(set(ov.get("exclude") or []) - {choice["id"]})
+    ov["include_items"] = sorted(set(ov.get("include_items") or []) | {a.item})
+    limit = int(((d.get("limits") or {}).get("bullets") or {}).get(a.item)
+                or bank.get("settings", {}).get("max_bullets_per_item", 4))
+    if len(on_item) + 1 > limit:
+        d.setdefault("limits", {}).setdefault("bullets", {})[a.item] = len(on_item) + 1
+    return {"kind": "bullet", "action": "add", "out": None, "in": choice["id"], "item": a.item, "chosen": chosen}
+
+
 @app.post("/api/drafts/{draft_id}/reset")
 def reset_draft(draft_id: str):
     """Undo every change: back to the plan you started from (still no model call)."""
     d = _draft_or_404(draft_id)
     bank = _bank_or_400()
     d["overrides"] = {k: list(d["initial"]["overrides"].get(k) or []) for k in drafts.KEYS}
-    d["order"], d["texts"], d["changes"] = {}, {}, []
+    d["order"], d["texts"], d["changes"], d["limits"] = {}, {}, [], {}
     prep = drafts.prepare(bank, d)
     drafts.refresh(bank, d, prep)
     d["rev"] += 1

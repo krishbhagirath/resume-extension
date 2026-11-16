@@ -104,3 +104,112 @@ def test_matcher_draft_makes_no_model_call(fake, client, small_bank):
     exp = items(d, "experiences")
     d2 = client.post(f"/api/drafts/{d['id']}/edit", json={"order": {"experiences": list(reversed(exp))}}).json()
     assert items(d2, "experiences") == list(reversed(exp)) and m.calls == []
+
+
+@needs_tex
+def test_add_an_item_past_the_section_limit(fake, client, small_bank):
+    """Only 2 experiences show (limit 2); you add a third: it goes in, the limit rises for this resume only,
+    other items lose bullets as needed, and it still fits one page. No model call."""
+    bigger_bank(client, small_bank)                       # max_experiences=2, plus "cafe" and "lab2" (overlaps lab)
+    m = fake()
+    d = plan(client)
+    exp = items(d, "experiences")
+    assert len(exp) == 2
+    unused = {u["id"]: u for u in d["options"]["experiences"]["unused"]}
+    target = "cafe" if "cafe" in unused else next(i for i, u in unused.items() if not u["overlaps"])
+    url = f"/api/drafts/{d['id']}/edit"
+
+    # refusals: already on the page; same work as a printed item
+    assert client.post(url, json={"add": [{"section": "experiences", "in": exp[0]}]}).status_code == 409
+    if "lab" in exp and "lab2" in unused:
+        assert client.post(url, json={"add": [{"section": "experiences", "in": "lab2"}]}).status_code == 409
+
+    d2 = client.post(url, json={"add": [{"section": "experiences", "in": target}]}).json()
+    exp2 = items(d2, "experiences")
+    assert target in exp2 and len(exp2) == 3, exp2
+    assert len(m.calls) == 1
+    assert d2["preview"]["lines_used"] <= d2["preview"]["budget"] + 0.01
+
+    # build: the added experience is printed, one page
+    run = finish(client, client.post(f"/api/drafts/{d['id']}/build").json())
+    assert run["validation"]["one_page"]
+    assert target in [e["id"] for e in run["selection"]["experiences"] if e["bullet_ids"]]
+
+    # reset drops the added item and the raised limit
+    d3 = client.post(f"/api/drafts/{d['id']}/reset").json()
+    assert items(d3, "experiences") == exp
+
+
+@needs_tex
+def test_add_best_fit_and_swap_a_project_for_an_experience(fake, client, small_bank):
+    bigger_bank(client, small_bank)
+    fake()
+    d = plan(client)
+    proj = items(d, "projects")
+    url = f"/api/drafts/{d['id']}/edit"
+    # remove a project and add an experience in the same change ("best fit" picks which)
+    r = client.post(url, json={"items": [{"out": proj[0], "in": None}], "add": [{"section": "experiences", "in": "any"}]})
+    assert r.status_code == 200, r.text
+    d2 = r.json()
+    assert proj[0] not in items(d2, "projects")
+    assert len(items(d2, "experiences")) == len(items(d, "experiences")) + 1
+
+
+@needs_tex
+def test_best_fit_never_brings_back_what_you_removed(fake, client, small_bank):
+    bigger_bank(client, small_bank)
+    fake()
+    d = plan(client)
+    url = f"/api/drafts/{d['id']}/edit"
+    removed = items(d, "experiences")[0]
+    d2 = client.post(url, json={"items": [{"out": removed, "in": None}]}).json()
+    for _ in range(2):                                            # add "best fit" twice
+        r = client.post(url, json={"add": [{"section": "experiences", "in": "any"}]})
+        if r.status_code == 409:                                  # ran out of other experiences: fine
+            break
+        d2 = r.json()
+        assert removed not in items(d2, "experiences")
+    # picking it by name still works
+    d3 = client.post(url, json={"add": [{"section": "experiences", "in": removed}]})
+    assert d3.status_code == 200 and removed in items(d3.json(), "experiences")
+
+
+@needs_tex
+def test_add_a_point_past_the_per_item_limit(fake, client, small_bank):
+    """An item shows 3 points (the limit); you add a 4th: its 3 stay, the limit rises for that item only,
+    and the room comes from elsewhere. Best fit never re-adds a point you removed."""
+    import bank as bankmod
+    bigger_bank(client, small_bank)
+    b = bankmod.load_dict(client.mod.BANK_PATH)
+    b["settings"]["max_bullets_per_item"] = 3
+    acme = next(i for i in b["experiences"] if i["id"] == "acme")
+    acme["bullets"] += [{"id": "acme-x1", "text": "Wrote Python scripts that cut nightly batch jobs from 40 to 12 minutes."},
+                        {"id": "acme-x2", "text": "Documented 15 internal REST endpoints in OpenAPI for the support team."}]
+    bankmod.save(client.mod.BANK_PATH, b)
+    m = fake()
+    d = plan(client)
+    pv = {it["id"]: [x["id"] for x in it["bullets"]] for s in ("experiences", "projects") for it in d["preview"][s]}
+    if "acme" not in pv:
+        pytest.skip("acme not planned for this posting")
+    before = pv["acme"]
+    assert len(before) == 3
+    url = f"/api/drafts/{d['id']}/edit"
+    assert client.post(url, json={"add_bullets": [{"item": "web", "in": "any"}]}).status_code == 400   # not on page
+    other = next(x for i, xs in pv.items() if i != "acme" for x in xs)
+    assert client.post(url, json={"add_bullets": [{"item": "acme", "in": other}]}).status_code == 409
+
+    d2 = client.post(url, json={"add_bullets": [{"item": "acme", "in": "any"}]}).json()
+    now = [x["id"] for it in d2["preview"]["experiences"] if it["id"] == "acme" for x in it["bullets"]]
+    assert len(now) == 4 and set(before) <= set(now), now
+    assert len(m.calls) == 1
+
+    # remove the new point, then best fit again: it picks a different one, not the removed point
+    added = (set(now) - set(before)).pop()
+    d3 = client.post(url, json={"bullets": [{"out": added, "in": None}]}).json()
+    r = client.post(url, json={"add_bullets": [{"item": "acme", "in": "any"}]})
+    if r.status_code == 200:
+        again = [x["id"] for it in r.json()["preview"]["experiences"] if it["id"] == "acme" for x in it["bullets"]]
+        assert added not in again
+
+    run = finish(client, client.post(f"/api/drafts/{d['id']}/build").json())
+    assert run["validation"]["one_page"]

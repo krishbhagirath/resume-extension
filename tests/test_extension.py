@@ -237,6 +237,18 @@ def test_switching_jobs_after_making_a_resume_resets_cleanly(browser):
     page.close()
 
 
+def test_widget_comes_back_if_the_site_removes_it(browser):
+    """Some sites re-render the whole document and drop elements they didn't create."""
+    page = open_page(browser, "https://jobs.lever.co/acme/5f1c-uuid")
+    open_panel(page)
+    page.evaluate("document.querySelector('resume-tailor-widget').remove()")
+    page.evaluate("document.body.appendChild(document.createElement('div'))")
+    page.wait_for_timeout(300)
+    st = panel_state(page)
+    assert st["shown"] and st["open"], st
+    page.close()
+
+
 def test_dismiss_and_hide(browser):
     page = open_page(browser, "https://jobs.lever.co/acme/5f1c-uuid")
     page.evaluate("document.querySelector('resume-tailor-widget').shadowRoot.querySelector('[data-act=dismiss]').click()")
@@ -264,6 +276,30 @@ def test_end_to_end_download_and_attach(browser, server):
       sel.value = 'remove'; sel.dispatchEvent(new Event('change', {{bubbles: true}})); }}""")
     page.wait_for_function(f"() => /^Updated/.test({msg}) && !{cards}.includes({json.dumps(out)})", timeout=30000)
     assert not runs()
+
+    # 2b. "+ Add an experience" (best fit): one more experience card, still nothing compiled
+    exp_cards = f"{R}.querySelectorAll('#editor .sec[data-section=experiences] .card').length"
+    n = page.evaluate(exp_cards)
+    add = f"{R}.querySelector('#editor select[data-kind=add][data-section=experiences]')"
+    assert page.evaluate(f"!!{add}"), "the + Add row should be there"
+    page.evaluate(f"() => {{ const s = {add}; s.value = 'any'; s.dispatchEvent(new Event('change', {{bubbles: true}})); }}")
+    page.wait_for_function(f"() => /^Updated/.test({msg}) && {exp_cards} === {n + 1}", timeout=30000)
+    assert not runs()
+
+    # 2c. "+ Add a point" inside a card: that card gets one more bullet
+    target = page.evaluate(f"""() => {{ const c = [...{R}.querySelectorAll('#editor .card')].find(c => c.querySelector('select[data-kind=addBullet]'));
+      if (!c) return null;
+      c.querySelector('[data-act=toggleItem]').click();
+      const s = c.querySelector('select[data-kind=addBullet]');
+      const n = c.querySelectorAll('li').length;
+      s.value = 'any'; s.dispatchEvent(new Event('change', {{bubbles: true}}));
+      return [c.dataset.item, n]; }}""")
+    if target:
+        item, n_b = target
+        page.wait_for_function(f"""() => /^Updated/.test({msg}) &&
+            {R}.querySelectorAll('#editor .card[data-item="{item}"] li').length === {n_b + 1}""", timeout=30000)
+        assert not runs()
+        page.evaluate(f"""{R}.querySelector('#editor .card[data-item="{item}"] [data-act=toggleItem]').click()""")   # close it again
 
     # 3. drag the last card of a section above the first
     sec = page.evaluate(f"""() => [...{R}.querySelectorAll('#editor .sec')].map(s => [s.dataset.section,
@@ -334,4 +370,25 @@ def test_website_cannot_use_server(browser):
     }}""")
     assert res["get"] in ("blocked", 403) and res["post"] in ("blocked", 403), res
     assert res["pair"] == "blocked", res
+    page.close()
+
+
+def test_zz_stale_copy_after_extension_update_cleans_up(browser):
+    """Runs last: reloads the extension, like a Chrome update or a reload in chrome://extensions. The copy of
+    the script left in an already-open tab must remove its button (no "Extension context invalidated" errors).
+    (Reloading the tab then loads the current copy in real Chrome; this test browser doesn't restart an
+    unpacked extension after chrome.runtime.reload(), so that last step isn't checked here.)"""
+    page = open_page(browser, "https://jobs.lever.co/acme/5f1c-uuid")
+    assert pill(page).is_visible()
+    errors = []
+    page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+    try:
+        browser.sw.evaluate("chrome.runtime.reload()")
+    except Exception:
+        pass                                   # the worker goes away mid-call
+    page.wait_for_timeout(1500)
+    page.evaluate("document.body.appendChild(document.createElement('div'))")   # any page activity
+    page.wait_for_timeout(500)
+    assert page.evaluate("document.querySelector('resume-tailor-widget')") is None
+    assert not [e for e in errors if "context invalidated" in e], errors
     page.close()

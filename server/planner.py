@@ -111,6 +111,8 @@ class Selection:
     # your order from the preview editor: {"experiences": [ids], "projects": [ids], "bullets": {item: [ids]}}.
     # Anything not listed keeps its usual place after the listed ones.
     order: dict = field(default_factory=dict)
+    # per-item bullet limits raised from the preview editor (you added a point to an item at its limit)
+    item_max: dict = field(default_factory=dict)
 
     # ------------------------------------------------------------ settings
     @property
@@ -206,7 +208,7 @@ class Selection:
             if not free:
                 continue
             if ids:  # item already on the page: add one bullet
-                if len(ids) >= self.max_b:
+                if len(ids) >= self.item_max.get(item_id, self.max_b):
                     continue
                 for c in free:
                     g = self.gain(c, miss)
@@ -364,9 +366,10 @@ def pick_skills(bank: dict, job: JobAnalysis, picked: list[Candidate]) -> list[d
     return out
 
 
-def plan(bank: dict, job: JobAnalysis, cands: list[Candidate], items: dict, budget: float | None = None) -> Selection:
+def plan(bank: dict, job: JobAnalysis, cands: list[Candidate], items: dict, budget: float | None = None,
+         item_max: dict | None = None) -> Selection:
     sel = Selection(bank=bank, job=job, cands={c.bullet_id: c for c in cands}, items=items,
-                    budget=budget if budget is not None else default_budget(bank))
+                    budget=budget if budget is not None else default_budget(bank), item_max=dict(item_max or {}))
     # pinned items first (with their pinned bullets + best others up to the minimum)
     for item_id, info in items.items():
         if info["pinned"] and not sel._blocked_item(item_id):

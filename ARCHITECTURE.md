@@ -36,7 +36,7 @@
 
 The extension doesn't compile until you approve the content.
 - **Plan job** (`POST /api/jobs` with `mode: "plan"`): `tailor.prepare()` runs steps 1-4 (analyze, score, rank, select) with no LaTeX. It saves `output/drafts/<id>.json` with the posting, the variant, the model's ranking (`llm_rank`), overrides, your order and wording, and a preview.
-- **Edits** (`POST /api/drafts/{id}/edit`): run synchronously and return the new preview in about a second. The batch format is the same as the run editor (`items`, `bullets`), plus `order` (items per section), `bullet_order` (per item) and `texts` (your wording per bullet, `null` to undo). Re-planning reuses `llm_rank`, so it never calls the model. Items and bullets are checked by the same code as finished runs. Edited bullets are kept on the page, and their line count is estimated from the template's measured line width. `reset` returns to the first plan.
+- **Edits** (`POST /api/drafts/{id}/edit`): run synchronously and return the new preview in about a second. The batch format is the same as the run editor (`items`, `bullets`), plus `order` (items per section), `bullet_order` (per item) and `texts` (your wording per bullet, `null` to undo). Re-planning reuses `llm_rank`, so it never calls the model. Items and bullets are checked by the same code as finished runs. Edited bullets are kept on the page, and their line count is estimated from the template's measured line width. `add: [{section, in}]` puts another item on the page (an unused id, or `"any"` = best fit): the items already in that section are pinned so nothing you can see is pushed out, and if the section is at its limit, `limits` raises `max_experiences`/`max_projects` for this draft only (`tailor.prepare(limits=...)`). `add_bullets: [{item, in}]` puts one more point under an item (an unused bullet of it that isn't another wording of a shown one, or `"any"` = its highest-scoring one by the draft's saved ranking): the item and its current points are pinned, and if the item is at `max_bullets_per_item`, `limits.bullets[item]` raises it for this draft (`Selection.item_max`). Automatic best-fit picks (items or points) never choose something you removed. `reset` returns to the first plan and clears `limits`.
 - **Build** (`POST /api/drafts/{id}/build`): a job keyed by draft and revision. It re-plans exactly as previewed, then `tailor.finish()` runs the layout loop once (rewording skips your edited bullets) and writes a normal run. `fit_changes` reports anything the one-page fitting left out or added. Your wording prints as `printed: "edited"`. When the draft had changes, one pick is logged (`source: "edit"`, the first plan vs the built resume, reasons projects / bullets / layout).
 - `planner.Selection.order` applies your item and bullet order in `ordered()`. Anything you didn't place keeps its usual position after the ones you did.
 - The full pipeline (`tailor.run`) is `prepare` + `finish`, so the web page and the API's default mode are unchanged.
@@ -84,7 +84,7 @@ States: `queued → analyzing → matching → selecting → rendering → optim
 ```
 pip install -r requirements-dev.txt
 python -m playwright install chromium   # once, for the extension tests
-python -m pytest -q                      # 167 tests, no Claude usage
+python -m pytest -q                      # 177 tests, no Claude usage
 python tests/benchmark.py                # per-role timing / coverage / overlap table
 npm install && npm run check:ext         # type-check the extension (tsc --checkJs)
 ```

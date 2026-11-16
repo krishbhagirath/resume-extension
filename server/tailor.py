@@ -158,14 +158,15 @@ def prepare(bank: dict, jd: str, *, title: str = "", company: str = "", force: b
             job_id: str | None = None, progress=lambda s, m: None, cancelled=lambda: False,
             use_llm: bool = True, include=(), exclude=(), include_items=(), exclude_items=(),
             llm_rank: dict | None = None, mode_hint: str | None = None, texts: dict | None = None,
-            order: dict | None = None) -> Prepared:
+            order: dict | None = None, limits: dict | None = None) -> Prepared:
     """Analyze, score, rank and choose what goes on the page, without compiling anything.
 
     use_llm=False skips the Claude re-rank (the "matcher" variant of an A/B comparison).
     include / exclude are manual swaps: bullet ids forced onto the page / kept off it.
     include_items / exclude_items replace whole experiences or projects the same way.
     llm_rank (+ mode_hint) reuses an earlier ranking, so a re-plan costs no model call.
-    texts: your wording for some bullets (they're kept on the page); order: your item/bullet order."""
+    texts: your wording for some bullets (they're kept on the page); order: your item/bullet order.
+    limits: {"experiences": n, "projects": n} raises the section limits for this resume (you added one)."""
     t0 = time.time()
     include, exclude = set(include or ()), set(exclude or ())
     include_items, exclude_items = set(include_items or ()), set(exclude_items or ())
@@ -296,7 +297,14 @@ def prepare(bank: dict, jd: str, *, title: str = "", company: str = "", force: b
     check_cancel()
     progress("selecting", "Choosing the strongest content for one page…")
     t = time.time()
-    sel = planner.plan(bank, job, cands, items)
+    plan_bank = bank
+    if limits:   # you added an item past the usual section limit: allow it for this resume only
+        st_ = dict(bank.get("settings", {}))
+        for sec, key in (("experiences", "max_experiences"), ("projects", "max_projects")):
+            if limits.get(sec):
+                st_[key] = max(int(limits[sec]), int(st_.get(key, 3)))
+        plan_bank = {**bank, "settings": st_}
+    sel = planner.plan(plan_bank, job, cands, items, item_max=(limits or {}).get("bullets"))
     sel.order = order or {}
     tick("select", t)
     stats["mode"] = mode

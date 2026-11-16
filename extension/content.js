@@ -6,8 +6,19 @@
   if (window.top !== window || /** @type {any} */ (window).__resumeTailorLoaded) return;
   /** @type {any} */ (window).__resumeTailorLoaded = true;
 
+  /** False once the extension is reloaded or updated: this copy of the script is cut off from it. */
+  const alive = () => { try { return !!chrome.runtime?.id; } catch { return false; } };
+  /** A cut-off copy removes its button and stops watching the page, instead of throwing on every click.
+   * The new copy loads when the tab is reloaded. */
+  function teardown() {
+    try { observer.disconnect(); } catch { /* not set up yet */ }
+    host?.remove();
+    host = null;
+    visible = false;
+  }
   /** @param {any} msg @returns {Promise<any>} */
   const send = (msg) => new Promise((res) => {
+    if (!alive()) { teardown(); return res({ ok: false, error: "The extension was updated. Reload this page." }); }
     try { chrome.runtime.sendMessage(msg, (r) => res(r || { ok: false, error: chrome.runtime.lastError?.message || "No reply" })); }
     catch { res({ ok: false, error: "The extension was updated. Reload this page." }); }
   });
@@ -109,6 +120,10 @@
   .tbtn { display: flex; gap: 6px; justify-content: flex-end; }
   .tbtn .primary, .tbtn .secondary { width: auto; padding: 6px 12px; font-size: 12.5px; }
   .editor.busy { opacity: .55; pointer-events: none; }
+  .addrow select.act { width: 100%; max-width: none; border-style: dashed; background: transparent; color: var(--slate); padding: 7px 8px; }
+  .addrow select.act:hover, .addrow select.act:focus { color: var(--ink); border-color: var(--slate); }
+  .addb { margin-top: 6px; padding-left: 20px; }
+  .addb select.act { padding: 5px 8px; font-size: 12px; }
   .buildbar { position: sticky; bottom: -14px; display: flex; gap: 10px; align-items: center; justify-content: flex-end; background: var(--paper); border-top: 1px solid var(--rule); padding: 10px 0 6px; z-index: 1; }
   .buildbar .primary { width: auto; padding: 9px 16px; }
   .foot { display: flex; justify-content: space-between; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--rule); color: var(--slate); font-size: 12px; }
@@ -172,7 +187,7 @@
   // Drag the button anywhere along the right/bottom; position is remembered per site.
   function enableDrag() {
     const wrap = $(".wrap"), pill = $(".pill");
-    chrome.storage.local.get("pos").then(({ pos = {} }) => {
+    if (alive()) chrome.storage.local.get("pos").then(({ pos = {} }) => {
       const p = pos[location.hostname];
       if (p) { wrap.style.right = p.right + "px"; wrap.style.bottom = p.bottom + "px"; }
     });
@@ -193,7 +208,7 @@
     });
     pill.addEventListener("pointerup", async () => {
       pill.classList.remove("dragging");
-      if (moved) {
+      if (moved && alive()) {
         const { pos = {} } = await chrome.storage.local.get("pos");
         pos[location.hostname] = { right: parseFloat(wrap.style.right), bottom: parseFloat(wrap.style.bottom) };
         await chrome.storage.local.set({ pos });
@@ -365,13 +380,20 @@
     const pv = draft.preview, opts = draft.options;
     $("#linesChip").textContent = `~${Math.round(pv.lines_used)} of ${Math.round(pv.budget)} lines`;
     $("#resetDraft").hidden = !draft.changed;
-    box.innerHTML = `<div class="ed-head"><b>On this resume</b><small>Drag ⠿ to reorder, ✎ to reword a bullet, or use a dropdown to remove or replace. Each change updates in about a second; nothing compiles until Build PDF.</small></div>` +
+    box.innerHTML = `<div class="ed-head"><b>On this resume</b><small>Drag ⠿ to reorder, ✎ to reword a bullet, use a dropdown to remove or replace, or + Add for another item or point. Each change updates in about a second; nothing compiles until Build PDF.</small></div>` +
       Object.entries(SECTION).map(([sec, label]) => {
         const rows = pv[sec] || [];
-        if (!rows.length) return "";
+        // items you could add: unused, printable, and not the same work as something already on the page
+        const addable = (opts[sec]?.unused || []).filter((/** @type {any} */ u) => !u.blocked && !u.overlaps.length);
+        if (!rows.length && !addable.length) return "";
         const meta = Object.fromEntries((opts[sec]?.on_page || []).map((/** @type {any} */ it) => [it.id, it]));
+        const noun = sec === "experiences" ? "an experience" : "a project";
         return `<h3>${label}</h3><div class="sec" data-section="${sec}">${rows.map((/** @type {any} */ it) =>
-          card(it, meta[it.id] || { spare: [] }, opts[sec]?.unused || [])).join("")}</div>`;
+          card(it, meta[it.id] || { spare: [] }, opts[sec]?.unused || [])).join("")}</div>` +
+          (addable.length ? `<div class="addrow"><select class="act add" data-kind="add" data-section="${sec}" aria-label="Add ${noun}">
+            <option value="">+ Add ${noun}…</option><option value="any">Best fit for this job</option>
+            ${addable.map((/** @type {any} */ u) => `<option value="${esc(u.id)}">${esc(cut(u.title + (u.org ? ", " + u.org : ""), 60))}</option>`).join("")}
+          </select></div>` : "");
       }).join("");
   }
 
@@ -401,7 +423,18 @@
           ${cands.length ? `<optgroup label="Replace with"><option value="any">Best fit for this job</option>${cands.map((u) =>
             `<option value="${esc(u.id)}">${esc(cut(u.title + (u.org ? ", " + u.org : ""), 48))}</option>`).join("")}</optgroup>` : ""}
         </select></div>
-      <ol class="bl" data-item="${esc(it.id)}" ${open ? "" : "hidden"}>${bl}</ol></div>`;
+      <ol class="bl" data-item="${esc(it.id)}" ${open ? "" : "hidden"}>${bl}</ol>${addPoint(it, spare, open)}</div>`;
+  }
+
+  /** "+ Add a point" under an open card: the item's unused points (not another wording of one shown).
+   * @param {any} it @param {any[]} spare @param {boolean} open */
+  function addPoint(it, spare, open) {
+    const fresh = spare.filter((/** @type {any} */ o) => !o.same_as);
+    if (!fresh.length) return "";
+    return `<div class="addrow addb" ${open ? "" : "hidden"}><select class="act add" data-kind="addBullet" data-item="${esc(it.id)}" aria-label="Add a point to ${esc(it.title)}">
+      <option value="">+ Add a point…</option><option value="any">Best fit for this job</option>
+      ${fresh.map((/** @type {any} */ o) => `<option value="${esc(o.id)}">${esc(cut(o.text, 80))}</option>`).join("")}
+    </select></div>`;
   }
 
   /** Send one change, re-plan, redraw. @param {any} body @param {string} what */
@@ -425,6 +458,16 @@
 
   /** @param {HTMLSelectElement} sel */
   function onSelect(sel) {
+    if (sel.dataset.kind === "addBullet") {
+      if (!sel.value) return;
+      return edit({ add_bullets: [{ item: sel.dataset.item, in: sel.value }] }, "Adding a point");
+    }
+    if (sel.dataset.kind === "add") {
+      if (!sel.value) return;
+      const label = sel.selectedOptions[0]?.textContent || "";
+      return edit({ add: [{ section: sel.dataset.section, in: sel.value }] },
+        sel.value === "any" ? "Adding the best fit" : `Adding ${cut(label, 40)}`);
+    }
     if (sel.value === "keep") return;
     const v = sel.value === "remove" ? null : sel.value;
     const kind = sel.dataset.kind;
@@ -594,6 +637,8 @@
       openItems.has(id) ? openItems.delete(id) : openItems.add(id);
       const ol = /** @type {HTMLElement} */ (c.querySelector(".bl"));
       ol.hidden = !openItems.has(id);
+      const addb = /** @type {HTMLElement | null} */ (c.querySelector(".addb"));
+      if (addb) addb.hidden = ol.hidden;
       const chev = c.querySelector(".chev");
       if (chev) { chev.textContent = ol.hidden ? "▸" : "▾"; chev.setAttribute("aria-expanded", String(!ol.hidden)); }
     }
@@ -611,6 +656,7 @@
     if (act === "editJd") { $("#jdWrap").hidden = !$("#jdWrap").hidden; renderSource(); }
     if (act === "dismiss") { dismissedUrl = location.href; hide(); }
     if (act === "hideSite") {
+      if (!alive()) return teardown();
       const { hiddenSites = [] } = await chrome.storage.local.get("hiddenSites");
       await chrome.storage.local.set({ hiddenSites: [...new Set([...hiddenSites, location.hostname])] });
       hide();
@@ -622,6 +668,7 @@
   const panelOpen = () => !!host && !panel().hidden;
 
   async function check() {
+    if (!alive()) return teardown();
     const { showButton = true, hiddenSites = [] } = await chrome.storage.local.get(["showButton", "hiddenSites"]);
     if (!showButton || hiddenSites.includes(location.hostname) || dismissedUrl === location.href) {
       if (!panelOpen()) hide();   // opened by hand (toolbar button): it stays even where the button is hidden
@@ -671,7 +718,12 @@
   let timer = 0;
   const schedule = (ms = 400) => { clearTimeout(timer); timer = /** @type {any} */ (setTimeout(() => { onUrlChange(); if (!visible) check(); }, ms)); };
   let checks = 0;
-  const observer = new MutationObserver(() => { if (location.href !== lastUrl || (!visible && checks++ < 40)) schedule(); });
+  const observer = new MutationObserver(() => {
+    if (!alive()) return teardown();
+    // some sites re-render the whole document and drop anything they didn't create: put the widget back
+    if (host && visible && !host.isConnected) document.documentElement.appendChild(host);
+    if (location.href !== lastUrl || (!visible && checks++ < 40)) schedule();
+  });
   observer.observe(document.documentElement, { childList: true, subtree: true });
   addEventListener("popstate", () => schedule(50));
   /** @type {any} */ const nav = /** @type {any} */ (window).navigation;

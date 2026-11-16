@@ -50,6 +50,7 @@ def prepare(bank: dict, d: dict, **kw) -> tailor.Prepared:
     return tailor.prepare(bank, d["jd"], title=d.get("role", ""), company=d.get("company", ""), force=True,
                           use_llm=d.get("variant") != "matcher", llm_rank=d.get("llm_rank") or {},
                           mode_hint=d.get("mode"), texts=d.get("texts"), order=d.get("order"),
+                          limits=d.get("limits") or {},
                           **{k: d["overrides"].get(k) or [] for k in KEYS}, **kw)
 
 
@@ -71,7 +72,7 @@ def create(out: Path, bank: dict, req: dict, prep: tailor.Prepared, stats: dict)
          "role": (req.get("role") or prep.job.title or "").strip(), "url": req.get("url", ""),
          "variant": req.get("variant") or "claude", "mode": prep.mode, "llm_rank": prep.llm_rank,
          "overrides": {k: list(req.get(k) or []) for k in KEYS}, "order": {}, "texts": {},
-         "rev": 0, "changes": [], "logged_rev": 0, "built": None, "stats": stats,
+         "rev": 0, "changes": [], "logged_rev": 0, "built": None, "stats": stats, "limits": {},
          "text_hash": prep.job.text_hash}
     refresh(bank, d, prep)
     plan = prep.sel.ordered()

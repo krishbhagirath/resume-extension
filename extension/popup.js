@@ -27,11 +27,18 @@ $("open").addEventListener("click", async () => {
   if (!tab?.id) return;
   try {
     const r = await chrome.tabs.sendMessage(tab.id, { type: "openPanel" });
-    if (r?.ok) window.close();
+    if (r?.ok) return window.close();
+    throw new Error("no reply");
   } catch {
-    setMsg("This page can't be read (or was open before the extension loaded: reload it). You can paste the posting in Resume Tailor instead.", true);
+    // usually: this tab was open before the extension was installed, reloaded or updated, so it's still
+    // running a cut-off copy (or none). Reloading the tab loads the current one.
+    const web = /^https?:/.test(tab.url || "https:");
+    setMsg(web ? "This tab is running an older copy of the extension (it was open when the extension updated). Reload it, then click Tailor resume again."
+               : "This page can't be read. You can paste the posting in Resume Tailor instead.", true);
+    $("reload").hidden = !web;
   }
 });
+$("reload").addEventListener("click", () => { if (tab?.id) chrome.tabs.reload(tab.id); window.close(); });
 $("openApp").addEventListener("click", () => { send({ type: "openApp" }); window.close(); });
 $("showButton").addEventListener("change", () => chrome.storage.local.set({ showButton: $("showButton").checked }));
 $("unhide").addEventListener("click", async () => {
