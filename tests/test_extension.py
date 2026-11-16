@@ -159,6 +159,84 @@ def test_linkedin_spa_navigation_updates(browser):
     page.close()
 
 
+def popup_open(browser, url_glob):
+    """What the toolbar popup's "Tailor resume to this page" button does: message the page to open the panel."""
+    # the extension has no "tabs" permission, so it can't filter tabs by URL: use the newest tab (the page just opened)
+    return browser.sw.evaluate("""chrome.tabs.query({})
+        .then(ts => chrome.tabs.sendMessage(ts.sort((a, b) => b.id - a.id)[0].id, {type: 'openPanel'}))""")
+
+
+def panel_state(page):
+    return page.evaluate("""() => {
+      const w = document.querySelector('resume-tailor-widget');
+      return { shown: !!w && w.style.display !== 'none',
+               open: !!w && !w.shadowRoot.querySelector('.panel').hidden,
+               role: w?.shadowRoot.querySelector('#role').value || '' };
+    }""")
+
+
+def test_opened_by_hand_stays_open_when_the_site_rewrites_its_url(browser):
+    """A page the detector misses: you open the panel from the toolbar, then the site tweaks its URL
+    (tracking or scroll parameters). The panel must not close or vanish."""
+    page = open_page(browser, "https://blog.example.com/2026/sourdough")
+    assert not pill(page).is_visible()                                   # not detected as a job
+    assert popup_open(browser, "https://blog.example.com/*")["ok"]
+    page.wait_for_timeout(400)
+    assert panel_state(page)["open"] and panel_state(page)["shown"]
+    for i in range(3):                                                    # the site rewrites its address
+        page.evaluate(f"history.replaceState({{}}, '', location.pathname + '?utm_source=x&pos={i}')")
+        page.evaluate("document.body.appendChild(document.createElement('div'))")
+        page.wait_for_timeout(700)
+    st = panel_state(page)
+    assert st["open"] and st["shown"], st
+    page.close()
+
+
+def test_opened_by_hand_on_a_hidden_site_stays_open(browser):
+    page = open_page(browser, "https://blog.example.com/2026/sourdough")
+    browser.sw.evaluate("chrome.storage.local.set({hiddenSites: ['blog.example.com']})")
+    try:
+        popup_open(browser, "https://blog.example.com/*")
+        page.wait_for_timeout(400)
+        page.evaluate("history.replaceState({}, '', location.pathname + '#comments')")
+        page.evaluate("document.body.appendChild(document.createElement('div'))")
+        page.wait_for_timeout(900)
+        st = panel_state(page)
+        assert st["open"] and st["shown"], st
+    finally:
+        browser.sw.evaluate("chrome.storage.local.set({hiddenSites: []})")
+        page.close()
+
+
+def test_linkedin_switching_jobs_with_the_panel_open(browser):
+    page = open_page(browser, "https://www.linkedin.com/jobs/search/?currentJobId=1")
+    assert open_panel(page)["role"] == "Backend Intern"
+    page.click("#job2")
+    page.wait_for_function("""() => document.querySelector('resume-tailor-widget')
+        .shadowRoot.querySelector('#role').value === 'Hardware Verification Intern'""", timeout=8000)
+    st = panel_state(page)
+    assert st["open"] and st["shown"]
+    page.close()
+
+
+def test_switching_jobs_after_making_a_resume_resets_cleanly(browser):
+    """After a resume, the main button becomes "Start over"; switching jobs used to crash the reset."""
+    page = open_page(browser, "https://www.linkedin.com/jobs/search/?currentJobId=1")
+    R = "document.querySelector('resume-tailor-widget').shadowRoot"
+    open_panel(page)
+    page.evaluate(f"{R}.querySelector('.primary[data-act=make]').click()")
+    page.wait_for_function(f"() => /^Preview ready/.test({R}.querySelector('#msg').textContent)", timeout=60000)
+    page.evaluate(f"{R}.querySelector('[data-act=close]').click()")
+    page.click("#job2")
+    page.wait_for_timeout(1200)
+    # the old job is cleared and the button is back to "Make resume" (the crash left both stale)
+    st = page.evaluate(f"""() => ({{ role: {R}.querySelector('#role').value, msg: {R}.querySelector('#msg').textContent,
+        make: {R}.querySelector('[data-act=make]')?.textContent || null,
+        startOver: !!{R}.querySelector('[data-act=startOver]'), pill: !{R}.querySelector('.pillbox').hidden }})""")
+    assert st == {"role": "", "msg": "", "make": "Make resume", "startOver": False, "pill": True}, st
+    page.close()
+
+
 def test_dismiss_and_hide(browser):
     page = open_page(browser, "https://jobs.lever.co/acme/5f1c-uuid")
     page.evaluate("document.querySelector('resume-tailor-widget').shadowRoot.querySelector('[data-act=dismiss]').click()")

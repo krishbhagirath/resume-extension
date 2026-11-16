@@ -618,29 +618,52 @@
   }
 
   // ------------------------------------------------------------ when to show
+  /** The panel is open: you're using it, so nothing closes or hides it automatically. */
+  const panelOpen = () => !!host && !panel().hidden;
+
   async function check() {
     const { showButton = true, hiddenSites = [] } = await chrome.storage.local.get(["showButton", "hiddenSites"]);
-    if (!showButton || hiddenSites.includes(location.hostname) || dismissedUrl === location.href) return hide();
+    if (!showButton || hiddenSites.includes(location.hostname) || dismissedUrl === location.href) {
+      if (!panelOpen()) hide();   // opened by hand (toolbar button): it stays even where the button is hidden
+      return;
+    }
     const isJob = looksLikeJobPage();
     if (isJob && !visible) show();
-    if (!isJob && visible && (!host || panel().hidden) && !polling) hide();
+    if (!isJob && visible && !panelOpen() && !polling) hide();
     if (isJob) {
       const j = extractJob();
       if (j.jd.length >= 200 && j.confidence >= 0.6) send({ type: "rememberJob", job: { ...j, url: location.href } });
     }
   }
 
+  function resetPanel() {
+    $("#company").value = ""; $("#role").value = ""; $("#jd").value = ""; $("#result").innerHTML = ""; $("#steps").hidden = true;
+    setMsg(""); lastJob = null; job = null; draft = null; openItems.clear();
+    const b = $('[data-act="make"], [data-act="startOver"]');
+    if (b) { b.className = "primary"; b.textContent = "Make resume"; b.dataset.act = "make"; }
+  }
+
   function onUrlChange() {
     if (location.href === lastUrl) return;
     lastUrl = location.href;
     checks = 0;
-    if (host && !polling) {
-      $("#company").value = ""; $("#role").value = ""; $("#jd").value = ""; $("#result").innerHTML = ""; $("#steps").hidden = true;
-      setMsg(""); lastJob = null; job = null; draft = null; openItems.clear();
-      const b = $('[data-act="make"]'); b.className = "primary"; b.textContent = "Make resume";
-      closePanel();
+    if (panelOpen()) {
+      // Many job sites rewrite their address on their own (tracking or scroll parameters). Never close the
+      // panel for that. If it's idle, look again shortly: a different posting (e.g. a LinkedIn job switch)
+      // gets loaded into the open panel; the same posting is left alone. Mid-job or mid-edit: untouched.
+      if (!polling && !draft && !lastJob) setTimeout(refreshPosting, 700);
+      return;
     }
+    if (host && !polling) { resetPanel(); closePanel(); }
     check();
+  }
+
+  async function refreshPosting() {
+    if (!panelOpen() || polling || draft || lastJob) return;
+    const j = extractJob();
+    if (j.jd.length < 200 || j.jd.trim() === $("#jd").value.trim()) return;   // nothing new to read here
+    resetPanel();
+    openPanel();
   }
 
   // Single-page sites (LinkedIn, Workday, Simplify) change the URL and render late: watch the DOM,
