@@ -124,11 +124,14 @@ async function handle(msg, sender) {
       const job = await api(`/api/jobs/${encodeURIComponent(msg.id)}`);
       return { ok: true, download: await downloadJob(job, true) };
     }
-    case "editOptions":
-      return { ok: true, items: await api(`/api/run/${encodeURIComponent(msg.runId)}/edit-options`) };
-    case "applyEdits": {
-      const job = await api(`/api/run/${encodeURIComponent(msg.runId)}/edit`,
-        { method: "POST", body: JSON.stringify({ items: msg.items || [], bullets: msg.bullets || [] }) });
+    case "draft":
+      return { ok: true, draft: await api(`/api/drafts/${encodeURIComponent(msg.id)}`) };
+    case "draftEdit":
+      return { ok: true, draft: await api(`/api/drafts/${encodeURIComponent(msg.id)}/edit`, { method: "POST", body: JSON.stringify(msg.body || {}) }) };
+    case "draftReset":
+      return { ok: true, draft: await api(`/api/drafts/${encodeURIComponent(msg.id)}/reset`, { method: "POST" }) };
+    case "draftBuild": {
+      const job = await api(`/api/drafts/${encodeURIComponent(msg.id)}/build`, { method: "POST" });
       await chrome.storage.session.set({ ["active:" + tabId]: { id: job.id, url: msg.url || "", at: Date.now() } });
       return { ok: true, job };
     }

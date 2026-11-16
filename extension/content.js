@@ -21,8 +21,7 @@
   /** @type {ShadowRoot} */ let root;
   /** @type {any} */ let job = null;
   /** @type {any} */ let lastJob = null;
-  /** @type {any} */ let lastOpts = null;    // what's on the page, spare bullets, items that could come in
-  let afterNote = "";                       // shown once with the next "Ready" (what a batch changed)
+  /** @type {any} */ let draft = null;       // the planned resume you're editing (nothing compiled until Build PDF)
   let lastUrl = "", visible = false, polling = false, dismissedUrl = "";
 
   // ------------------------------------------------------------ UI
@@ -80,6 +79,7 @@
   .row1 { display: flex; gap: 8px; align-items: center; }
   .row1 .nm { flex: 1; min-width: 0; font-weight: 600; }
   .row1 .nm small { display: block; font-weight: 400; font-size: 11.5px; color: var(--slate); }
+  .row1 select.act { max-width: 120px; }
   select.act { font: inherit; font-size: 12px; color: var(--ink); background: var(--paper); border: 1px solid var(--rule); border-radius: 6px; padding: 4px 6px; max-width: 175px; }
   select.act:disabled { opacity: .5; }
   .card .more { margin-top: 5px; font-size: 11.5px; color: var(--slate); text-decoration: none; }
@@ -89,9 +89,28 @@
   .bl li.gone .tx { text-decoration: line-through; color: var(--slate); }
   .bl .tx { font-size: 12px; line-height: 1.35; }
   .bl select.act { max-width: 100%; align-self: flex-start; }
-  .applybar { position: sticky; bottom: -14px; display: flex; gap: 8px; align-items: center; background: var(--paper); border-top: 1px solid var(--rule); padding: 10px 0 6px; z-index: 1; }
-  .applybar span { flex: 1; font-weight: 600; }
-  .applybar .primary, .applybar .secondary { width: auto; padding: 8px 12px; }
+  .sec { display: flex; flex-direction: column; gap: 6px; }
+  .grip { cursor: grab; color: var(--slate); user-select: none; font-size: 15px; line-height: 1; padding: 0 2px; }
+  .grip:active { cursor: grabbing; }
+  .chev { background: none; border: 0; color: var(--slate); padding: 0 2px; font-size: 12px; width: 16px; }
+  .row1 .nm { cursor: pointer; }
+  .card.dragging, .bl li.dragging { opacity: .35; }
+  .bl { list-style: none; counter-reset: b; }
+  .bl li { gap: 5px; }
+  .brow { display: flex; gap: 6px; align-items: flex-start; }
+  .brow .tx { flex: 1; }
+  .bact { display: flex; gap: 8px; align-items: center; padding-left: 20px; }
+  .icon { background: none; border: 0; color: var(--slate); padding: 0 3px; font-size: 13px; line-height: 1.2; border-radius: 4px; }
+  .icon:hover { color: var(--ink); background: var(--sheet); }
+  .tag { font-size: 10.5px; color: var(--warn); border: 1px solid var(--rule); border-radius: 99px; padding: 0 6px; white-space: nowrap; }
+  .tedit { display: flex; flex-direction: column; gap: 5px; padding-left: 20px; }
+  .tedit textarea { height: 64px; font-size: 12.5px; }
+  .tedit small { color: var(--slate); font-size: 11px; }
+  .tbtn { display: flex; gap: 6px; justify-content: flex-end; }
+  .tbtn .primary, .tbtn .secondary { width: auto; padding: 6px 12px; font-size: 12.5px; }
+  .editor.busy { opacity: .55; pointer-events: none; }
+  .buildbar { position: sticky; bottom: -14px; display: flex; gap: 10px; align-items: center; justify-content: flex-end; background: var(--paper); border-top: 1px solid var(--rule); padding: 10px 0 6px; z-index: 1; }
+  .buildbar .primary { width: auto; padding: 9px 16px; }
   .foot { display: flex; justify-content: space-between; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--rule); color: var(--slate); font-size: 12px; }
   .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: s .7s linear infinite; flex: none; }
   @keyframes s { to { transform: rotate(360deg); } }
@@ -138,6 +157,7 @@
       e.stopPropagation(); // keep site shortcuts from firing while typing
     });
     enableDrag();
+    enableEditorEvents();
     document.documentElement.appendChild(host);
   }
 
@@ -252,27 +272,31 @@
     return j;
   }
 
-  /** @param {boolean} [forceText] */
-  async function make(forceText = false) {
+  /** @param {boolean} [forceText] @param {boolean} [fresh] */
+  async function make(forceText = false, fresh = false) {
     if (polling) return;
     const jd = $("#jd").value.trim();
     if (words(jd) < 10) { $("#jdWrap").hidden = false; renderSource(); return setMsg("Paste the full job description first.", "err"); }
     $("#result").innerHTML = "";
     setMsg("");
+    draft = null; lastJob = null;
     const r = await send({ type: "startJob", payload: {
-      jd, company: $("#company").value.trim(), role: $("#role").value.trim(), url: location.href,
-      source: job?.source || "", confidence: job?.confidence ?? null, force_text: forceText } });
+      jd, company: $("#company").value.trim(), role: $("#role").value.trim(), url: location.href, mode: "plan",
+      source: job?.source || "", confidence: job?.confidence ?? null, force_text: forceText, force: fresh } });
     if (!r.ok) return setMsg(esc(r.error), "err");
     await follow(r.job.id);
   }
 
-  /** Poll the server until the job ends. Safe to call again after the panel or page is reopened. @param {string} id */
-  async function follow(id) {
+  /** Poll the server until the job ends. Safe to call again after the panel or page is reopened.
+   * Plan jobs end in the preview editor; build jobs end with Download. @param {string} id @param {boolean} [building] */
+  async function follow(id, building = false) {
     polling = true;
-    const btn = $(".primary[data-act=make]") || $(".secondary[data-act=make]");
-    btn.disabled = true;
-    btn.innerHTML = '<span class="spin"></span> Working…';
-    $("#result").innerHTML = '<button class="secondary" data-act="cancel">Cancel</button>';
+    const btn = $(".primary[data-act=make]") || $(".secondary[data-act=make]") || $("[data-act=startOver]");
+    const area = (building && $("#built")) || $("#result");
+    if (!building && btn) { btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Working…'; }
+    const build = $("[data-act=build]");
+    if (building && build) { build.disabled = true; build.innerHTML = '<span class="spin"></span> Building…'; }
+    area.innerHTML = '<button class="secondary" data-act="cancel">Cancel</button>';
     $("#steps").hidden = false;
     let r;
     try {
@@ -281,15 +305,14 @@
         if (!r.ok) { setMsg(esc(r.error), "err"); break; }
         renderSteps(r.job);
         if (["completed", "failed", "cancelled"].includes(r.job.state)) break;
-        await new Promise((res) => setTimeout(res, 800));
+        await new Promise((res) => setTimeout(res, 700));
       }
     } finally {
       polling = false;
-      btn.disabled = false;
-      btn.textContent = "Make resume";
-      btn.className = "primary";
+      if (btn) { btn.disabled = false; btn.className = "primary"; btn.textContent = "Make resume"; btn.dataset.act = "make"; }
+      if (build) { build.disabled = false; build.textContent = "Build PDF"; }
     }
-    $("#result").innerHTML = "";
+    area.innerHTML = "";
     if (!r?.ok) return;
     const j = r.job;
     if (j.state === "cancelled") return setMsg("Cancelled.", "warn");
@@ -302,133 +325,205 @@
       }
       return;
     }
-    lastJob = j;
     $("#steps").hidden = true;   // done: give the space to the preview
-    const res = j.result, sc = res.scorecard || {}, st = res.stats || {};
+    const res = j.result;
     if (!$("#company").value) $("#company").value = res.company || "";
     if (!$("#role").value) $("#role").value = res.role || "";
-    btn.className = "secondary";
-    btn.textContent = "Make another version";
-    const warnings = (res.warnings || []).map((/** @type {string} */ w) => `\n${esc(w)}`).join("");
-    const note = afterNote ? `\n${esc(afterNote)}` : "";
-    afterNote = "";
-    setMsg(`Ready: <span class="file">${esc(res.filename)}</span>. Check what's on it, then download.${note}${warnings}`,
-      warnings || !sc.one_page ? "warn" : "ok");
-    const canAttach = !!findResumeInput();
+    if (btn) { btn.className = "secondary"; btn.textContent = "Start over (new plan)"; btn.dataset.act = "startOver"; }
+    if (res.run_id) showBuilt(j);
+    else await showDraft(res.draft_id, res);
+  }
+
+  // ------------------------------------------------------------ preview first, then build once
+  /** @param {string} t @param {number} n */
+  const cut = (t, n) => (t.length > n ? t.slice(0, n - 1) + "…" : t);
+  const SECTION = { experiences: "Experience", projects: "Projects" };
+  /** @type {Set<string>} */ const openItems = new Set();
+  let editing = false;
+
+  /** @param {string} id @param {any} [res] */
+  async function showDraft(id, res) {
+    const r = await send({ type: "draft", id });
+    if (!r.ok) return setMsg(esc(r.error), "err");
+    draft = r.draft;
+    const st = (res && res.stats) || draft.stats || {};
+    const warnings = ((res && res.warnings) || []).map((/** @type {string} */ w) => `\n${esc(w)}`).join("");
+    setMsg(`Preview ready. Change anything below, then <b>Build PDF</b>.${warnings}`, warnings ? "warn" : "ok");
     $("#result").innerHTML = `
-      <div class="stats"><span class="chip">${pct(sc.supported_coverage)} of what you can show</span><span class="chip">${sc.one_page ? "1 page" : "over 1 page"}</span>
-        <span class="chip">${st.llm_requests ? `${st.llm_requests} Claude call${st.llm_requests > 1 ? "s" : ""}` : "no Claude usage"}</span><span class="chip">${st.seconds ?? "?"}s</span></div>
-      <div class="editor" id="editor"><span class="spin"></span> Loading what's on the page…</div>
-      <div class="applybar" id="applybar" hidden><span id="nchanges"></span>
-        <button class="secondary" data-act="resetEdits">Reset</button><button class="primary" data-act="applyEdits">Apply &amp; rebuild</button></div>
+      <div class="stats"><span class="chip">${st.llm_requests ? `${st.llm_requests} Claude call` : st.llm_cached ? "Claude answer reused" : "no Claude usage"}</span>
+        <span class="chip">${st.seconds ?? "?"}s to plan</span><span class="chip" id="linesChip"></span></div>
+      <div class="editor" id="editor"></div>
+      <div class="buildbar"><button class="link" data-act="resetDraft" id="resetDraft">Undo all changes</button>
+        <button class="primary" data-act="build">Build PDF</button></div>
+      <div class="result" id="built"></div>`;
+    renderDraft();
+  }
+
+  function renderDraft() {
+    const box = $("#editor");
+    if (!box || !draft) return;
+    const pv = draft.preview, opts = draft.options;
+    $("#linesChip").textContent = `~${Math.round(pv.lines_used)} of ${Math.round(pv.budget)} lines`;
+    $("#resetDraft").hidden = !draft.changed;
+    box.innerHTML = `<div class="ed-head"><b>On this resume</b><small>Drag ⠿ to reorder, ✎ to reword a bullet, or use a dropdown to remove or replace. Each change updates in about a second; nothing compiles until Build PDF.</small></div>` +
+      Object.entries(SECTION).map(([sec, label]) => {
+        const rows = pv[sec] || [];
+        if (!rows.length) return "";
+        const meta = Object.fromEntries((opts[sec]?.on_page || []).map((/** @type {any} */ it) => [it.id, it]));
+        return `<h3>${label}</h3><div class="sec" data-section="${sec}">${rows.map((/** @type {any} */ it) =>
+          card(it, meta[it.id] || { spare: [] }, opts[sec]?.unused || [])).join("")}</div>`;
+      }).join("");
+  }
+
+  /** @param {any} it @param {any} meta @param {any[]} unused */
+  function card(it, meta, unused) {
+    const open = openItems.has(it.id);
+    const cands = unused.filter((u) => !u.blocked && u.overlaps.every((/** @type {string} */ o) => o === it.id));
+    const spare = (meta.spare || []).filter((/** @type {any} */ o) => !o.blocked);
+    const bl = it.bullets.map((/** @type {any} */ b) => {
+      const swaps = spare.filter((/** @type {any} */ o) => !o.same_as || o.same_as === b.id);
+      return `<li data-bullet="${esc(b.id)}" data-item="${esc(it.id)}">
+        <div class="brow"><span class="grip" title="Drag to reorder">⠿</span>
+          <span class="tx">${esc(b.text)}${b.edited ? ' <span class="tag">edited</span>' : ""}</span>
+          <button class="icon" data-act="editText" title="Edit wording" aria-label="Edit wording">✎</button></div>
+        <div class="bact"><select class="act" data-kind="bullet" data-out="${esc(b.id)}" aria-label="Change this bullet">
+            <option value="keep">Keep</option><option value="remove">Remove</option>
+            ${swaps.length ? `<optgroup label="Swap for">${swaps.map((/** @type {any} */ o) =>
+              `<option value="${esc(o.id)}">${esc(cut((o.same_as ? "Other wording: " : "") + o.text, 80))}</option>`).join("")}</optgroup>` : ""}
+          </select>${b.edited ? '<button class="link" data-act="revertText">Undo edit</button>' : ""}</div></li>`;
+    }).join("");
+    return `<div class="card" data-item="${esc(it.id)}">
+      <div class="row1"><span class="grip" title="Drag to reorder">⠿</span>
+        <button class="chev" data-act="toggleItem" aria-expanded="${open}" aria-label="Show bullets">${open ? "▾" : "▸"}</button>
+        <div class="nm" data-act="toggleItem">${esc(it.title)}<small>${it.org ? esc(it.org) + " · " : ""}${it.bullets.length} bullet${it.bullets.length === 1 ? "" : "s"}${spare.length ? ` · ${spare.length} unused` : ""}</small></div>
+        <select class="act" data-kind="item" data-out="${esc(it.id)}" aria-label="Change ${esc(it.title)}">
+          <option value="keep">Keep</option><option value="remove">Remove</option>
+          ${cands.length ? `<optgroup label="Replace with"><option value="any">Best fit for this job</option>${cands.map((u) =>
+            `<option value="${esc(u.id)}">${esc(cut(u.title + (u.org ? ", " + u.org : ""), 48))}</option>`).join("")}</optgroup>` : ""}
+        </select></div>
+      <ol class="bl" data-item="${esc(it.id)}" ${open ? "" : "hidden"}>${bl}</ol></div>`;
+  }
+
+  /** Send one change, re-plan, redraw. @param {any} body @param {string} what */
+  async function edit(body, what) {
+    if (!draft || editing || polling) return;
+    editing = true;
+    $("#editor")?.classList.add("busy");
+    setMsg(`<span class="spin"></span> ${esc(what)}…`);
+    const r = await send({ type: "draftEdit", id: draft.id, body });
+    editing = false;
+    $("#editor")?.classList.remove("busy");
+    if (!r.ok) { setMsg(esc(r.error), "err"); renderDraft(); return; }
+    draft = r.draft;
+    renderDraft();
+    if (lastJob) {            // the PDF you built no longer matches
+      lastJob = null;
+      $("#built").innerHTML = '<p class="msg warn">Changed since your last build. Build PDF again to download.</p>';
+    }
+    setMsg("Updated. Change more, or <b>Build PDF</b>.", "ok");
+  }
+
+  /** @param {HTMLSelectElement} sel */
+  function onSelect(sel) {
+    if (sel.value === "keep") return;
+    const v = sel.value === "remove" ? null : sel.value;
+    const kind = sel.dataset.kind;
+    const label = sel.selectedOptions[0]?.textContent || "";
+    edit(kind === "item" ? { items: [{ out: sel.dataset.out, in: v }] } : { bullets: [{ out: sel.dataset.out, in: v }] },
+      v === null ? "Removing" : v === "any" ? "Finding the best fit" : `Swapping in ${cut(label, 40)}`);
+  }
+
+  async function build() {
+    if (!draft || polling || editing) return;
+    const r = await send({ type: "draftBuild", id: draft.id, url: location.href });
+    if (!r.ok) return setMsg(esc(r.error), "err");
+    setMsg('<span class="spin"></span> Building the PDF and fitting one page…');
+    await follow(r.job.id, true);
+  }
+
+  /** @param {any} j */
+  function showBuilt(j) {
+    lastJob = j;
+    const res = j.result, sc = res.scorecard || {};
+    const fc = res.fit_changes || { dropped: [], added: [] };
+    const fit = fc.dropped.length || fc.added.length
+      ? `\nTo fit one page, the layout step ${[fc.dropped.length ? `left out: ${fc.dropped.map((/** @type {any} */ b) => `“${cut(b.text, 60)}”`).join(", ")}` : "",
+          fc.added.length ? `added ${fc.added.length} bullet${fc.added.length === 1 ? "" : "s"}` : ""].filter(Boolean).join("; ")}.`
+      : "";
+    const warnings = (res.warnings || []).map((/** @type {string} */ w) => `\n${esc(w)}`).join("");
+    setMsg(`Ready: <span class="file">${esc(res.filename)}</span>.${esc(fit)}${warnings}`, fit || warnings || !sc.one_page ? "warn" : "ok");
+    const canAttach = !!findResumeInput();
+    const html = `
+      <div class="stats"><span class="chip">${pct(sc.supported_coverage)} of what you can show</span><span class="chip">${sc.one_page ? "1 page" : "over 1 page"}</span><span class="chip">${res.stats?.seconds ?? "?"}s to build</span></div>
       <button class="primary" data-act="download">${sc.one_page ? "Download" : "Download anyway (over 1 page)"}</button>
       ${canAttach ? '<button class="secondary" data-act="attach">Attach to this application</button>' : ""}
       <button class="secondary" data-act="openPdf">Open PDF</button>
       <button class="secondary" data-act="overleaf">Edit in Overleaf</button>`;
-    loadEditor(res.run_id);
+    if ($("#built")) $("#built").innerHTML = html; else $("#result").innerHTML = html;
   }
 
-  // ------------------------------------------------------------ preview editor: change several things, apply once
-  const SECTION = { experiences: "Experience", projects: "Projects" };
-  const FIXED = ["keep", "remove", "any"];
-  /** @param {string} t @param {number} n */
-  const cut = (t, n) => (t.length > n ? t.slice(0, n - 1) + "…" : t);
-
-  /** @param {string} runId */
-  async function loadEditor(runId) {
-    const r = await send({ type: "editOptions", runId });
-    const box = $("#editor");
-    if (!box) return;
-    if (!r.ok) { box.textContent = `Couldn't list what's on the page (${r.error}).`; return; }
-    lastOpts = r.items;
-    box.innerHTML = `<div class="ed-head"><b>On this resume</b><small>Remove or replace experiences, projects or single bullets. Pick as many as you like, then apply them together.</small></div>` +
-      Object.entries(SECTION).map(([key, label]) => {
-        const s = r.items[key];
-        return s?.on_page?.length ? `<h3>${label}</h3>` + s.on_page.map((/** @type {any} */ it) => itemCard(it, s.unused, key)).join("") : "";
-      }).join("");
-    box.addEventListener("change", updateEditor);
-    updateEditor();
+  // drag to reorder: items within their section, bullets within their item
+  /** @type {HTMLElement | null} */ let dragEl = null;
+  /** @type {string} */ let dragBefore = "";
+  /** @param {HTMLElement} el */
+  const siblingsOf = (el) => [...(/** @type {HTMLElement} */ (el.parentElement)).children].filter((x) => x.matches(el.matches("li") ? "li" : ".card"));
+  function enableEditorEvents() {
+    root.addEventListener("pointerdown", (/** @type {any} */ e) => {
+      const g = e.target.closest(".grip");
+      if (!g || !draft || editing) return;
+      const el = g.closest("li") || g.closest(".card");
+      el.draggable = true;
+    });
+    root.addEventListener("dragstart", (/** @type {any} */ e) => {
+      const el = e.target.closest?.("li[draggable=true], .card[draggable=true]");
+      if (!el) return;
+      e.stopPropagation();
+      dragEl = el;
+      dragBefore = siblingsOf(el).map((x) => x.dataset.bullet || x.dataset.item).join(",");
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", "");
+      requestAnimationFrame(() => el.classList.add("dragging"));
+    });
+    root.addEventListener("dragover", (/** @type {any} */ e) => {
+      if (!dragEl) return;
+      const over = e.target.closest?.(dragEl.matches("li") ? "li" : ".card");
+      if (!over || over === dragEl || over.parentElement !== dragEl.parentElement) return;
+      e.preventDefault();
+      const r = over.getBoundingClientRect();
+      over.parentElement.insertBefore(dragEl, e.clientY < r.top + r.height / 2 ? over : over.nextSibling);
+    });
+    root.addEventListener("drop", (/** @type {any} */ e) => { if (dragEl) e.preventDefault(); });
+    root.addEventListener("dragend", () => {
+      if (!dragEl) return;
+      const el = dragEl;
+      dragEl = null;
+      el.classList.remove("dragging");
+      el.draggable = false;
+      const ids = siblingsOf(el).map((x) => x.dataset.bullet || x.dataset.item);
+      if (ids.join(",") === dragBefore) return;
+      if (el.matches("li")) edit({ bullet_order: { [el.dataset.item || ""]: ids } }, "Reordering bullets");
+      else edit({ order: { [el.closest(".sec")?.dataset.section || "experiences"]: ids } }, "Reordering");
+    });
+    root.addEventListener("change", (/** @type {any} */ e) => {
+      if (e.target.matches?.("#editor select.act")) onSelect(e.target);
+    });
   }
 
-  /** @param {any} it @param {any[]} unused @param {string} key */
-  function itemCard(it, unused, key) {
-    const cands = unused.filter((u) => !u.blocked);          // items that can't print aren't offered
-    const spare = (it.spare || []).filter((/** @type {any} */ o) => !o.blocked);
-    const bullets = it.printed.map((/** @type {any} */ b) => {
-      // another wording of a different printed bullet would just reword that one: only offer it here
-      const opts = spare.filter((/** @type {any} */ o) => !o.same_as || o.same_as === b.id);
-      return `<li data-bullet="${esc(b.id)}"><span class="tx">${esc(b.text)}</span>
-        <select class="act" data-kind="bullet" data-out="${esc(b.id)}" aria-label="Change this bullet">
-          <option value="keep">Keep</option><option value="remove">Remove</option>
-          ${opts.length ? `<optgroup label="Swap for">${opts.map((/** @type {any} */ o) =>
-            `<option value="${esc(o.id)}">${esc(cut((o.same_as ? "Other wording: " : "") + o.text, 80))}</option>`).join("")}</optgroup>` : ""}
-        </select></li>`;
-    }).join("");
-    return `<div class="card" data-item="${esc(it.id)}" data-section="${key}">
-      <div class="row1"><div class="nm">${esc(it.title)}${it.org ? `<small>${esc(it.org)}</small>` : ""}</div>
-        <select class="act" data-kind="item" data-out="${esc(it.id)}" aria-label="Change ${esc(it.title)}">
-          <option value="keep">Keep</option><option value="remove">Remove</option>
-          ${cands.length ? `<optgroup label="Replace with"><option value="any">Best fit for this job</option>${cands.map((u) =>
-            `<option value="${esc(u.id)}" data-overlaps="${esc(u.overlaps.join(" "))}">${esc(cut(u.title + (u.org ? ", " + u.org : ""), 48))}</option>`).join("")}</optgroup>` : ""}
-        </select></div>
-      <button class="link more" data-act="toggleBullets">${it.printed.length} bullet${it.printed.length === 1 ? "" : "s"}${spare.length ? ` · ${spare.length} unused` : ""} ▸</button>
-      <ul class="bl" hidden>${bullets}</ul></div>`;
-  }
-
-  /** Keeps the editor consistent after any change: no item or bullet picked twice, bullets of an item that's
-   * leaving are locked, changed rows are marked, and Download waits until changes are applied or reset. */
-  function updateEditor() {
-    const sels = $$("#editor select.act");
-    const leaving = new Set(sels.filter((s) => s.dataset.kind === "item" && s.value !== "keep").map((s) => s.dataset.out));
-    /** @param {string} kind */
-    const picked = (kind) => new Map(sels.filter((s) => s.dataset.kind === kind && !FIXED.includes(s.value)).map((s) => [s.value, s]));
-    const pick = { item: picked("item"), bullet: picked("bullet") };
-    for (const s of sels) {
-      for (const o of s.querySelectorAll("option")) {
-        if (FIXED.includes(o.value)) continue;
-        const other = /** @type {any} */ (pick)[s.dataset.kind].get(o.value);
-        // an item describing the same work as one staying on the page can't come in
-        const sameWork = (o.dataset.overlaps || "").split(" ").filter(Boolean).some((x) => x !== s.dataset.out && !leaving.has(x));
-        o.disabled = (!!other && other !== s) || sameWork;
-      }
-    }
-    for (const card of $$("#editor .card")) {
-      const isel = card.querySelector('select[data-kind="item"]');
-      const off = isel.value !== "keep";
-      for (const b of card.querySelectorAll('select[data-kind="bullet"]')) {
-        if (off) b.value = "keep";
-        b.disabled = off;
-        b.closest("li").classList.toggle("changed", b.value !== "keep");
-        b.closest("li").classList.toggle("gone", b.value === "remove");
-      }
-      card.classList.toggle("gone", isel.value === "remove");
-      card.classList.toggle("changed", off || !!card.querySelector("li.changed"));
-    }
-    const n = sels.filter((s) => !s.disabled && s.value !== "keep").length;
-    $("#applybar").hidden = n === 0;
-    $("#nchanges").textContent = `${n} change${n === 1 ? "" : "s"}`;
-    const dl = $('[data-act="download"]');
-    if (dl) { dl.disabled = n > 0; dl.title = n ? "Apply or reset your changes first" : ""; }
-  }
-
-  async function applyEdits() {
-    if (polling || !lastJob) return;
-    const sels = $$("#editor select.act").filter((s) => !s.disabled && s.value !== "keep");
-    if (!sels.length) return;
-    /** @param {string} kind */
-    const list = (kind) => sels.filter((s) => s.dataset.kind === kind).map((s) => ({ out: s.dataset.out, in: s.value === "remove" ? null : s.value }));
-    setMsg(`<span class="spin"></span> Rebuilding with ${sels.length} change${sels.length === 1 ? "" : "s"}…`);
-    $("#applybar").hidden = true;
-    const r = await send({ type: "applyEdits", runId: lastJob.result.run_id, items: list("item"), bullets: list("bullet"), url: location.href });
-    if (!r.ok) { $("#applybar").hidden = false; return setMsg(esc(r.error), "err"); }
-    const auto = (r.job.changes || []).filter((/** @type {any} */ c) => c.chosen === "auto").map((/** @type {any} */ c) => c.title);
-    afterNote = auto.length ? `Best fit picked: ${auto.join(", ")}.` : "";
-    await follow(r.job.id);
-  }
-
-  function resetEdits() {
-    for (const s of $$("#editor select.act")) s.value = "keep";
-    updateEditor();
+  /** @param {HTMLElement} li */
+  function openTextEditor(li) {
+    if (li.querySelector("textarea")) return;
+    const bid = li.dataset.bullet || "";
+    const b = draft.preview.experiences.concat(draft.preview.projects).flatMap((/** @type {any} */ it) => it.bullets)
+      .find((/** @type {any} */ x) => x.id === bid);
+    const box = document.createElement("div");
+    box.className = "tedit";
+    box.innerHTML = `<textarea maxlength="400" aria-label="Bullet wording">${esc(b?.text || "")}</textarea>
+      <small>Your words for this resume only (your bank isn't changed). Keep it to about one line.</small>
+      <div class="tbtn"><button class="secondary" data-act="cancelText">Cancel</button><button class="primary" data-act="saveText">Save</button></div>`;
+    li.querySelector(".brow")?.after(box);
+    const ta = /** @type {HTMLTextAreaElement} */ (box.querySelector("textarea"));
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
   }
 
   const ICON = { completed: "✓", failed: "✕", cancelled: "✕" };
@@ -472,6 +567,7 @@
     if (act === "toggle") panel().hidden ? openPanel() : closePanel();
     if (act === "close") closePanel();
     if (act === "make") make();
+    if (act === "startOver") make(false, true);
     if (act === "force") make(true);
     if (act === "cancel" && polling) {
       const a = await send({ type: "activeJob" });
@@ -484,14 +580,31 @@
       if (r.ok) setMsg(`Downloaded <span class="file">${esc(lastJob.result.filename)}</span>.`, "ok");
       else setMsg(esc(r.error), "err");
     }
-    if (act === "applyEdits") applyEdits();
-    if (act === "resetEdits") resetEdits();
-    if (act === "toggleBullets") {
-      const b = /** @type {HTMLElement} */ (/** @type {HTMLElement} */ (e.target).closest("[data-act]"));
-      const ul = /** @type {HTMLElement} */ (b.parentElement?.querySelector(".bl"));
-      ul.hidden = !ul.hidden;
-      b.textContent = b.textContent.replace(/[▸▾]$/, ul.hidden ? "▸" : "▾");
+    const el = /** @type {HTMLElement} */ (/** @type {HTMLElement} */ (e.target).closest("[data-act]"));
+    if (act === "build") build();
+    if (act === "resetDraft" && draft && !editing) {
+      editing = true;
+      const r = await send({ type: "draftReset", id: draft.id });
+      editing = false;
+      if (r.ok) { draft = r.draft; renderDraft(); setMsg("Back to the original plan.", "ok"); } else setMsg(esc(r.error), "err");
     }
+    if (act === "toggleItem") {
+      const c = /** @type {HTMLElement} */ (el.closest(".card"));
+      const id = c.dataset.item || "";
+      openItems.has(id) ? openItems.delete(id) : openItems.add(id);
+      const ol = /** @type {HTMLElement} */ (c.querySelector(".bl"));
+      ol.hidden = !openItems.has(id);
+      const chev = c.querySelector(".chev");
+      if (chev) { chev.textContent = ol.hidden ? "▸" : "▾"; chev.setAttribute("aria-expanded", String(!ol.hidden)); }
+    }
+    if (act === "editText") openTextEditor(/** @type {HTMLElement} */ (el.closest("li")));
+    if (act === "cancelText") el.closest(".tedit")?.remove();
+    if (act === "saveText") {
+      const li = /** @type {HTMLElement} */ (el.closest("li"));
+      const text = /** @type {HTMLTextAreaElement} */ (li.querySelector("textarea")).value.trim();
+      if (text) edit({ texts: { [li.dataset.bullet || ""]: text } }, "Saving your wording");
+    }
+    if (act === "revertText") edit({ texts: { [/** @type {HTMLElement} */ (el.closest("li")).dataset.bullet || ""]: null } }, "Undoing your edit");
     if (act === "openPdf" && lastJob) send({ type: "openRun", runId: lastJob.result.run_id, kind: "pdf" });
     if (act === "overleaf" && lastJob) send({ type: "openRun", runId: lastJob.result.run_id, kind: "overleaf" });
     if (act === "openApp") send({ type: "openApp" });
@@ -523,7 +636,7 @@
     checks = 0;
     if (host && !polling) {
       $("#company").value = ""; $("#role").value = ""; $("#jd").value = ""; $("#result").innerHTML = ""; $("#steps").hidden = true;
-      setMsg(""); lastJob = null; job = null; lastOpts = null; afterNote = "";
+      setMsg(""); lastJob = null; job = null; draft = null; openItems.clear();
       const b = $('[data-act="make"]'); b.className = "primary"; b.textContent = "Make resume";
       closePanel();
     }

@@ -167,53 +167,57 @@ def test_dismiss_and_hide(browser):
     page.close()
 
 
-def test_end_to_end_download_and_attach(browser):
+def test_end_to_end_download_and_attach(browser, server):
     page = open_page(browser, "https://boards.greenhouse.io/examplecorp/jobs/123")
     open_panel(page)
     R = "document.querySelector('resume-tailor-widget').shadowRoot"
-    page.evaluate(f"{R}.querySelector('.primary[data-act=make]').click()")
-    page.wait_for_function(f"() => /^Ready:/.test({R}.querySelector('#msg').textContent)", timeout=120000)
-    msg = page.evaluate(f"{R}.querySelector('#msg').textContent")
-    assert "Krish_Bhagirath_Examplecorp_SoftwareEngineeringInternBackend_Resume.pdf" in msg, msg
-    steps = page.evaluate(f"{R}.querySelector('#steps').textContent")
-    assert "Resume ready" in steps
-    # nothing downloads until you click Download: first, preview what's on the page
-    assert browser.sw.evaluate("chrome.downloads.search({}).then(x => x.length)") == 0
+    msg = f"{R}.querySelector('#msg').textContent"
     cards = f"[...{R}.querySelectorAll('#editor .card')].map(c => c.dataset.item)"
-    page.wait_for_function(f"() => {cards}.length > 1", timeout=15000)
+    runs = lambda: list((server / "output").glob("*/run.json"))
+    page.evaluate(f"{R}.querySelector('.primary[data-act=make]').click()")
+    # 1. preview first: what will go on the page, with nothing compiled or downloaded yet
+    page.wait_for_function(f"() => /^Preview ready/.test({msg}) && {cards}.length > 1", timeout=120000)
+    assert not runs() and browser.sw.evaluate("chrome.downloads.search({}).then(x => x.length)") == 0
     before = page.evaluate(cards)
-    # several changes at once: replace one item (best fit, or remove if nothing can replace it) and remove a
-    # bullet in a different item; the apply bar counts them and Download waits
-    plan = page.evaluate(f"""() => {{
-      const R = {R};
-      const set = (sel, v) => {{ sel.value = v; sel.dispatchEvent(new Event('change', {{bubbles: true}})); }};
-      const cs = [...R.querySelectorAll('#editor .card')];
-      const isel = cs[0].querySelector('select[data-kind=item]');
-      const how = [...isel.options].some(o => o.value === 'any') ? 'any' : 'remove';
-      set(isel, how);
-      cs[1].querySelector('[data-act=toggleBullets]').click();
-      const bsel = cs[1].querySelector('select[data-kind=bullet]');
-      set(bsel, 'remove');
-      return {{ out: cs[0].dataset.item, bullet: bsel.dataset.out, how,
-               bar: R.querySelector('#nchanges').textContent, barHidden: R.querySelector('#applybar').hidden,
-               dlDisabled: R.querySelector('[data-act=download]').disabled,
-               locked: [...cs[0].querySelectorAll('select[data-kind=bullet]')].every(b => b.disabled) }};
-    }}""")
-    assert plan["bar"] == "2 changes" and not plan["barHidden"] and plan["dlDisabled"] and plan["locked"], plan
-    page.evaluate(f"{R}.querySelector('[data-act=applyEdits]').click()")
-    page.wait_for_function(f"() => /^Ready:/.test({R}.querySelector('#msg').textContent) "
-                           f"&& {cards}.length > 0 && !{cards}.includes({json.dumps(plan['out'])})", timeout=120000)
-    after = page.evaluate(cards)
-    bullets_now = page.evaluate(f"[...{R}.querySelectorAll('#editor li[data-bullet]')].map(li => li.dataset.bullet)")
-    assert plan["out"] in before and plan["out"] not in after, (before, after)
-    assert plan["bullet"] not in bullets_now
-    # Reset clears pending changes and turns Download back on
-    page.evaluate(f"""() => {{
-      const sel = {R}.querySelector('#editor select[data-kind=item]');
-      sel.value = 'remove'; sel.dispatchEvent(new Event('change', {{bubbles: true}}));
-      {R}.querySelector('[data-act=resetEdits]').click(); }}""")
-    assert page.evaluate(f"{R}.querySelector('#applybar').hidden") is True
-    assert page.evaluate(f"{R}.querySelector('[data-act=download]').disabled") is False
+
+    # 2. remove an item: re-planned right away, still no PDF
+    out = before[0]
+    page.evaluate(f"""() => {{ const sel = {R}.querySelector('#editor .card select[data-kind=item]');
+      sel.value = 'remove'; sel.dispatchEvent(new Event('change', {{bubbles: true}})); }}""")
+    page.wait_for_function(f"() => /^Updated/.test({msg}) && !{cards}.includes({json.dumps(out)})", timeout=30000)
+    assert not runs()
+
+    # 3. drag the last card of a section above the first
+    sec = page.evaluate(f"""() => [...{R}.querySelectorAll('#editor .sec')].map(s => [s.dataset.section,
+        [...s.querySelectorAll('.card')].map(c => c.dataset.item)]).find(([_, ids]) => ids.length > 1)""")
+    if sec:
+        name, ids = sec
+        grips = page.locator(f"resume-tailor-widget .sec[data-section={name}] .card .row1 .grip")
+        grips.nth(len(ids) - 1).drag_to(grips.nth(0))
+        page.wait_for_function(f"""() => /^Updated/.test({msg}) &&
+            [...{R}.querySelectorAll('#editor .sec[data-section={name}] .card')][0].dataset.item === {json.dumps(ids[-1])}""",
+            timeout=30000)
+
+    # 4. reword a bullet with the pencil
+    first = page.evaluate(f"""() => {{ const c = {R}.querySelector('#editor .card');
+      c.querySelector('[data-act=toggleItem]').click();
+      const li = c.querySelector('li'); li.querySelector('[data-act=editText]').click();
+      li.querySelector('textarea').value = 'Built and tested backend REST services in Python used by product teams.';
+      li.querySelector('[data-act=saveText]').click(); return li.dataset.bullet; }}""")
+    page.wait_for_function(f"""() => /^Updated/.test({msg}) &&
+        {R}.querySelector('#editor li[data-bullet="' + {json.dumps(first)} + '"] .tag')?.textContent === 'edited'""", timeout=30000)
+    assert not runs()
+
+    # 5. build once, then download and attach
+    page.evaluate(f"{R}.querySelector('[data-act=build]').click()")
+    page.wait_for_function(f"() => /^Ready:/.test({msg})", timeout=120000)
+    assert "Krish_Bhagirath_Examplecorp_SoftwareEngineeringInternBackend_Resume.pdf" in page.evaluate(msg)
+    assert len(runs()) == 1
+    built = json.loads(runs()[0].read_text(encoding="utf-8"))
+    assert out not in [e["id"] for e in built["selection"]["experiences"] + built["selection"]["projects"] if e["bullet_ids"]]
+    prov = {p["bullet_id"]: p for p in built["provenance"]}
+    if first in prov:
+        assert prov[first]["printed"] == "edited"
     assert browser.sw.evaluate("chrome.downloads.search({}).then(x => x.length)") == 0
     page.evaluate(f"{R}.querySelector('[data-act=download]').click()")
     page.wait_for_function(f"() => /^Downloaded/.test({R}.querySelector('#msg').textContent)", timeout=15000)

@@ -32,6 +32,15 @@
    After re-fitting, each reworded bullet is measured again; a short last line rejects it and the layout runs once more.
 7. **Scorecard** (`evaluate.py`). Coverage of weighted requirements, *supported* coverage (only counting what your bank can show), unsupported requirements, share of quantified bullets, specificity, redundancy, rewording counts, one-page check. Every printed bullet has provenance: bank id, your wording or a checked rewording.
 
+## Drafts: preview first, compile once (`server/drafts.py`)
+
+The extension doesn't compile until you approve the content.
+- **Plan job** (`POST /api/jobs` with `mode: "plan"`): `tailor.prepare()` runs steps 1-4 (analyze, score, rank, select) with no LaTeX. It saves `output/drafts/<id>.json` with the posting, the variant, the model's ranking (`llm_rank`), overrides, your order and wording, and a preview.
+- **Edits** (`POST /api/drafts/{id}/edit`): run synchronously and return the new preview in about a second. The batch format is the same as the run editor (`items`, `bullets`), plus `order` (items per section), `bullet_order` (per item) and `texts` (your wording per bullet, `null` to undo). Re-planning reuses `llm_rank`, so it never calls the model. Items and bullets are checked by the same code as finished runs. Edited bullets are kept on the page, and their line count is estimated from the template's measured line width. `reset` returns to the first plan.
+- **Build** (`POST /api/drafts/{id}/build`): a job keyed by draft and revision. It re-plans exactly as previewed, then `tailor.finish()` runs the layout loop once (rewording skips your edited bullets) and writes a normal run. `fit_changes` reports anything the one-page fitting left out or added. Your wording prints as `printed: "edited"`. When the draft had changes, one pick is logged (`source: "edit"`, the first plan vs the built resume, reasons projects / bullets / layout).
+- `planner.Selection.order` applies your item and bullet order in `ordered()`. Anything you didn't place keeps its usual position after the ones you did.
+- The full pipeline (`tailor.run`) is `prepare` + `finish`, so the web page and the API's default mode are unchanged.
+
 ## Jobs (`server/pipeline.py`)
 
 States: `queued → analyzing → matching → selecting → rendering → optimizing → (writing → optimizing) → completed | failed | cancelled`.
@@ -75,7 +84,7 @@ States: `queued → analyzing → matching → selecting → rendering → optim
 ```
 pip install -r requirements-dev.txt
 python -m playwright install chromium   # once, for the extension tests
-python -m pytest -q                      # 165 tests, no Claude usage
+python -m pytest -q                      # 167 tests, no Claude usage
 python tests/benchmark.py                # per-role timing / coverage / overlap table
 npm install && npm run check:ext         # type-check the extension (tsc --checkJs)
 ```

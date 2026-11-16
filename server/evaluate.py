@@ -55,7 +55,7 @@ def scorecard(job: JobAnalysis, sel: Selection, plan: dict, measure: dict | None
         "rephrased": rephrased,
         "rephrase_rejected": rejected,
         # printed bullets that are neither your exact bank wording nor a fact-checked rewording
-        "unsupported_claims": sum(1 for p in provenance if p.get("printed") not in ("bank", "rephrased")),
+        "unsupported_claims": sum(1 for p in provenance if p.get("printed") not in ("bank", "rephrased", "edited")),
         "short_last_lines": [p["bullet_id"] for p in provenance if p.get("short_last_line")],
         "one_page": m.get("pages") == 1,
         "bottom_gap_pt": m.get("bottom_gap"),

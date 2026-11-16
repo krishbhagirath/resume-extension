@@ -28,6 +28,7 @@ from datetime import datetime
 from pathlib import Path
 
 import bank as bankmod
+import drafts
 import layout
 import llm
 import picks
@@ -122,7 +123,8 @@ class JobStore:
         key_src = json.dumps([re.sub(r"\s+", " ", req["jd"]).strip(), req.get("company", ""), req.get("role", ""),
                               bankmod.version_hash(bank_dict), tpl["version"], llm.engine(), llm.model_name(),
                               settings.get("rephrase"), req.get("rephrase"), req["variant"],
-                              *[req[k] for k in OVERRIDE_KEYS]], sort_keys=True)
+                              *[req[k] for k in OVERRIDE_KEYS], req.get("mode") or "full",
+                              req.get("draft_id"), req.get("rev")], sort_keys=True)
         key = hashlib.sha256(key_src.encode()).hexdigest()[:20]
         with self.lock:
             for j in self.jobs.values():
@@ -130,8 +132,9 @@ class JobStore:
                     continue
                 if j.state not in TERMINAL:
                     return j  # already running: duplicate click
-                if (j.state == "completed" and not req.get("force") and j.result
-                        and (self.out / j.result["run_id"] / j.result["filename"]).exists()):
+                if (j.state == "completed" and not req.get("force") and j.result and (
+                        (j.result.get("draft_id") and drafts.load(self.out, j.result["draft_id"]))
+                        or (j.result.get("run_id") and (self.out / j.result["run_id"] / j.result["filename"]).exists()))):
                     return j  # same inputs, same answer
             job = Job(id=uuid.uuid4().hex[:12], key=key, request=req)
             self.jobs[job.id] = job
@@ -155,10 +158,37 @@ class JobStore:
         try:
             req = job.request
             variant = req.get("variant") or "claude"
-            res = tailor.run(bank_dict, req["jd"], title=req.get("role", ""), company=req.get("company", ""),
-                             force=req.get("force_text", False), rephrase=req.get("rephrase"), job_id=job.id,
-                             progress=lambda s, m: self.set_state(job, s, m), cancelled=cancelled,
-                             use_llm=variant != "matcher", **{k: req.get(k) for k in OVERRIDE_KEYS})
+            progress = lambda s, m: self.set_state(job, s, m)
+            mode = req.get("mode") or "full"
+            draft = None
+            if mode == "plan":     # choose content only; you preview and edit before anything compiles
+                prep = tailor.prepare(bank_dict, req["jd"], title=req.get("role", ""), company=req.get("company", ""),
+                                      force=req.get("force_text", False), job_id=job.id, progress=progress,
+                                      cancelled=cancelled, use_llm=variant != "matcher",
+                                      **{k: req.get(k) for k in OVERRIDE_KEYS})
+                st = {**prep.stats, "seconds": round(time.time() - started, 1)}
+                d = drafts.create(self.out, bank_dict, req, prep, st)
+                job.result = {"draft_id": d["id"], "company": d["company"], "role": d["role"], "stats": st,
+                              "warnings": prep.warnings, "variant": variant}
+                self.set_state(job, "completed", "Preview ready.")
+                self._log(job, "completed", seconds=st["seconds"], compiles=0, llm_requests=st.get("llm_requests"),
+                          tokens=st.get("input_tokens", 0) + st.get("output_tokens", 0))
+                return
+            if mode == "build":    # compile a draft you approved
+                draft = drafts.load(self.out, req.get("draft_id", ""))
+                if not draft:
+                    raise ValueError("That preview no longer exists. Make the resume again.")
+                prep = drafts.prepare(bank_dict, draft, job_id=job.id, progress=progress, cancelled=cancelled)
+                res = tailor.finish(bank_dict, prep, rephrase=req.get("rephrase"), job_id=job.id, progress=progress,
+                                    cancelled=cancelled)
+                req = {**req, **{k: draft["overrides"].get(k) or [] for k in OVERRIDE_KEYS}, "jd": draft["jd"],
+                       "company": draft["company"], "role": draft["role"], "url": draft.get("url", "")}
+                variant = draft.get("variant") or variant
+            else:
+                res = tailor.run(bank_dict, req["jd"], title=req.get("role", ""), company=req.get("company", ""),
+                                 force=req.get("force_text", False), rephrase=req.get("rephrase"), job_id=job.id,
+                                 progress=progress, cancelled=cancelled,
+                                 use_llm=variant != "matcher", **{k: req.get(k) for k in OVERRIDE_KEYS})
             if cancelled():
                 raise layout.LayoutError("Cancelled.")
             company = (req.get("company") or res.company or "").strip()
@@ -180,10 +210,16 @@ class JobStore:
                 "analysis": res.analysis, "stats": res.stats, "warnings": res.warnings, "jd": req["jd"],
                 "bullet_scores": res.bullet_scores,
             }
+            if draft:
+                meta.update(draft_id=draft["id"], order=draft.get("order") or {},
+                            texts=draft.get("texts") or {}, fit_changes=drafts.fit_changes(draft, res.plan))
             (run_dir / "run.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
             job.result = {"run_id": run_id, "filename": filename, "company": company, "role": role,
                           "pdf_url": f"/api/pdf/{run_id}", "scorecard": res.scorecard, "stats": res.stats,
                           "warnings": res.warnings, "variant": variant}
+            if draft:
+                job.result.update(draft_id=draft["id"], fit_changes=meta["fit_changes"])
+                self._log_draft(draft, meta)
             if req.get("swap"):
                 self._log_swap(req["swap"], meta)
             self.set_state(job, "completed", "Resume ready.")
@@ -214,6 +250,21 @@ class JobStore:
             self._fail(job, "internal", f"Something went wrong: {e}", True)
         finally:
             self.cancel_flags.discard(job.id)
+
+    def _log_draft(self, draft: dict, meta: dict):
+        """Your edits to a draft are a pick: the built resume wins over the plan you started from."""
+        draft = drafts.load(self.out, draft["id"]) or draft
+        draft["built"] = {"run_id": meta["id"], "rev": draft.get("rev", 0)}
+        if draft.get("changes") and draft.get("logged_rev", 0) < draft.get("rev", 0):
+            kinds = {c.get("kind") for c in draft["changes"]}
+            reasons = [r for r, ks in (("projects", {"item"}), ("bullets", {"bullet", "text"}), ("layout", {"order"}))
+                       if kinds & ks]
+            try:
+                picks.append(self.out, draft["initial"], meta, "b", reasons, "edit", changes=draft["changes"])
+                draft["logged_rev"] = draft.get("rev", 0)
+            except Exception:
+                self._log(Job(id="-", key="-"), "pick_log_failed", trace=traceback.format_exc()[-1500:])
+        drafts.save(self.out, draft)
 
     def _new_run_dir(self, company: str) -> tuple[str, Path]:
         """output/<time>_<Company>, with -2, -3… when two jobs (A/B versions) finish in the same second."""

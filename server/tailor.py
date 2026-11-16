@@ -130,16 +130,46 @@ Bullets:
 {chr(10).join(body)}"""
 
 
-def run(bank: dict, jd: str, *, title: str = "", company: str = "", force: bool = False,
-        rephrase: bool | None = None, job_id: str | None = None, progress=lambda s, m: None,
-        cancelled=lambda: False, use_llm: bool = True, include=(), exclude=(), include_items=(),
-        exclude_items=()) -> Result:
-    """use_llm=False skips the Claude re-rank (the "matcher" variant of an A/B comparison).
+@dataclass
+class Prepared:
+    """Steps 1-4 done: what goes on the page is chosen, nothing is compiled yet."""
+    job: "analyzer.JobAnalysis"
+    sel: "planner.Selection"
+    fit: dict
+    min_fill: float
+    mode: str
+    llm_rank: dict          # the model's ranking bonus per bullet id; reused so re-planning never calls it again
+    stats: dict
+    warnings: list
+    include: set
+    include_items: set
+    texts: dict             # your own wording per bullet id (preview editor)
+    t0: float
+
+
+def run(bank: dict, jd: str, *, rephrase: bool | None = None, job_id: str | None = None,
+        progress=lambda s, m: None, cancelled=lambda: False, texts: dict | None = None, **kw) -> Result:
+    """Plan, then compile and fit one page. Keyword arguments are prepare()'s."""
+    prep = prepare(bank, jd, job_id=job_id, progress=progress, cancelled=cancelled, texts=texts, **kw)
+    return finish(bank, prep, rephrase=rephrase, job_id=job_id, progress=progress, cancelled=cancelled)
+
+
+def prepare(bank: dict, jd: str, *, title: str = "", company: str = "", force: bool = False,
+            job_id: str | None = None, progress=lambda s, m: None, cancelled=lambda: False,
+            use_llm: bool = True, include=(), exclude=(), include_items=(), exclude_items=(),
+            llm_rank: dict | None = None, mode_hint: str | None = None, texts: dict | None = None,
+            order: dict | None = None) -> Prepared:
+    """Analyze, score, rank and choose what goes on the page, without compiling anything.
+
+    use_llm=False skips the Claude re-rank (the "matcher" variant of an A/B comparison).
     include / exclude are manual swaps: bullet ids forced onto the page / kept off it.
-    include_items / exclude_items replace whole experiences or projects the same way."""
+    include_items / exclude_items replace whole experiences or projects the same way.
+    llm_rank (+ mode_hint) reuses an earlier ranking, so a re-plan costs no model call.
+    texts: your wording for some bullets (they're kept on the page); order: your item/bullet order."""
     t0 = time.time()
     include, exclude = set(include or ()), set(exclude or ())
     include_items, exclude_items = set(include_items or ()), set(exclude_items or ())
+    texts = {k: v for k, v in (texts or {}).items() if v}
     stats = {"llm_requests": 0, "llm_cached": 0, "input_tokens": 0, "output_tokens": 0, "timings": {}}
     warnings: list[str] = []
 
@@ -168,7 +198,15 @@ def run(bank: dict, jd: str, *, title: str = "", company: str = "", force: bool 
 
     # 3. re-rank: on-device semantic match (ENGINE=local) or Claude on a small pool (ids only)
     mode = "offline"
-    if use_llm and llm.engine() == "local":
+    rank: dict = {}
+    if llm_rank is not None and mode_hint != "local":
+        # re-planning a draft: reuse the ranking it already has (no model call at all)
+        rank = dict(llm_rank)
+        if rank:
+            cands, items = retrieval.score_bank(bank, job, rank)
+        mode = mode_hint or "offline"
+        stats["rank_reused"] = True
+    elif use_llm and llm.engine() == "local":
         check_cancel()
         progress("matching", "Matching meaning on this computer…")
         t = time.time()
@@ -193,8 +231,8 @@ def run(bank: dict, jd: str, *, title: str = "", company: str = "", force: bool 
             valid = {c.bullet_id for c in pool}
             ranked = [i for i in dict.fromkeys(data.get("ranked_ids", [])) if i in valid][:24]
             n = max(1, len(ranked))
-            llm_rank = {bid: RANK_BONUS * (1 - i / n) for i, bid in enumerate(ranked)}
-            cands, items = retrieval.score_bank(bank, job, llm_rank)
+            rank = {bid: RANK_BONUS * (1 - i / n) for i, bid in enumerate(ranked)}
+            cands, items = retrieval.score_bank(bank, job, rank)
             job.company = job.company or (data.get("company") or "").strip()[:80]
             job.title = job.title or (data.get("role") or "").strip()[:120]
             mode = llm.engine()
@@ -235,6 +273,16 @@ def run(bank: dict, jd: str, *, title: str = "", company: str = "", force: bool 
             c.lines = f["lines"]
             if layout.short_last_line(f, min_fill):
                 c.parts["short_last_line"] = 1.0
+    if texts:
+        # your own wording: estimate its lines from this template's line width, and keep it on the page
+        cpl = linefit.chars_per_line(fit) if fit else retrieval.CPL
+        for c in cands:
+            if c.bullet_id in texts:
+                c.lines = max(1, -(-len(re.sub(r"\*\*", "", texts[c.bullet_id])) // cpl))
+                c.parts.pop("short_last_line", None)
+                if not c.pinned:
+                    c.pinned, c.score = True, c.score + 10.0
+        cands.sort(key=lambda c: -c.score)
     if bank.get("settings", {}).get("strict_lines") and fit:
         # never print a bullet whose last line is a word or two; a clean wording of it takes its place
         dropped = {c.group for c in cands if c.parts.get("short_last_line") and not c.pinned and c.bullet_id == c.group}
@@ -249,12 +297,32 @@ def run(bank: dict, jd: str, *, title: str = "", company: str = "", force: bool 
     progress("selecting", "Choosing the strongest content for one page…")
     t = time.time()
     sel = planner.plan(bank, job, cands, items)
+    sel.order = order or {}
     tick("select", t)
+    stats["mode"] = mode
+    return Prepared(job=job, sel=sel, fit=fit, min_fill=min_fill, mode=mode, llm_rank=rank, stats=stats,
+                    warnings=warnings, include=include, include_items=include_items, texts=texts, t0=t0)
 
-    # 5. layout loop (your exact wording)
+
+def finish(bank: dict, prep: Prepared, *, rephrase: bool | None = None, job_id: str | None = None,
+           progress=lambda s, m: None, cancelled=lambda: False) -> Result:
+    """Steps 5-7: compile, fit exactly one page, optional rewording, scorecard."""
+    job, sel, fit, min_fill, mode = prep.job, prep.sel, prep.fit, prep.min_fill, prep.mode
+    stats, warnings, include, include_items, t0 = prep.stats, prep.warnings, prep.include, prep.include_items, prep.t0
+    user_texts = prep.texts
+
+    def tick(name: str, t: float):
+        stats["timings"][name] = round(time.time() - t, 2)
+
+    def check_cancel():
+        if cancelled():
+            raise layout.LayoutError("Cancelled.")
+
+    # 5. layout loop (your exact wording, or yours as edited in the preview)
     progress("rendering", "Building and checking the PDF…")
     t = time.time()
-    best, lay = layout.optimize(sel, bank, progress=lambda m: progress("optimizing", m), cancelled=cancelled)
+    best, lay = layout.optimize(sel, bank, texts=dict(user_texts) or None,
+                                progress=lambda m: progress("optimizing", m), cancelled=cancelled)
     tick("layout", t)
     texts: dict[str, str] = {}
 
@@ -265,7 +333,7 @@ def run(bank: dict, jd: str, *, title: str = "", company: str = "", force: bool 
     if do_rephrase and llm.available() and settings.get("max_rephrase", 3) > 0:
         check_cancel()
         t = time.time()
-        targets = _rephrase_targets(bank, job, best, sel, fit, settings)
+        targets = [x for x in _rephrase_targets(bank, job, best, sel, fit, settings) if x["id"] not in user_texts]
         stats["rephrase_targets"] = len(targets)
         if targets:
             progress("writing", f"Tightening {len(targets)} bullet{'s' if len(targets) > 1 else ''}…")
@@ -274,8 +342,8 @@ def run(bank: dict, jd: str, *, title: str = "", company: str = "", force: bool 
                 for _round in range(2):
                     if not texts:
                         break
-                    best2, lay2 = layout.optimize(sel, bank, texts=texts, progress=lambda m: progress("optimizing", m),
-                                                  cancelled=cancelled)
+                    best2, lay2 = layout.optimize(sel, bank, texts={**texts, **user_texts},
+                                                  progress=lambda m: progress("optimizing", m), cancelled=cancelled)
                     # check each rewording in the real PDF: no word or two dangling on a new line
                     printed = linefit.printed_texts(bank, set(texts), texts)
                     measured = layout.bullet_fit(best2.pdf, printed)
@@ -298,13 +366,13 @@ def run(bank: dict, jd: str, *, title: str = "", company: str = "", force: bool 
                 warnings.append("Reworded bullets didn't fit one page. Used your exact wording.")
                 texts = {}
         tick("rephrase", t)
-    provenance = _provenance(bank, best.plan, texts, rejected)
+    provenance = _provenance(bank, best.plan, texts, rejected, user_texts)
 
     # how every printed bullet actually laid out
     picked = [b for e in best.plan["experiences"] + best.plan["projects"] for b in e["bullet_ids"]]
     final_fit = {}
     try:
-        final_fit = layout.bullet_fit(best.pdf, linefit.printed_texts(bank, set(picked), texts))
+        final_fit = layout.bullet_fit(best.pdf, linefit.printed_texts(bank, set(picked), {**texts, **user_texts}))
     except Exception:
         pass
     for p in provenance:
@@ -325,7 +393,7 @@ def run(bank: dict, jd: str, *, title: str = "", company: str = "", force: bool 
     stats["compiles"] = lay["compiles"]
     stats["mode"] = mode
     stats["weights"] = planner.active_weights()[2]   # "learned" when data/learned_weights.json is in use
-    stats["pool_size"] = min(POOL_SIZE, len(cands)) if mode not in ("offline", "local") else 0
+    stats["pool_size"] = min(POOL_SIZE, len(sel.cands)) if mode not in ("offline", "local") else 0
     return Result(plan=best.plan, pdf=best.pdf, tex=best.source, company=job.company, role=job.title,
                   analysis={"roles": job.roles, "primary_roles": job.primary_roles, "seniority": job.seniority,
                             "requirements": [r.model_dump() for r in job.requirements[:20]],
@@ -406,18 +474,48 @@ def _rephrase(bank: dict, job: analyzer.JobAnalysis, targets: list[dict], stats:
     return accepted, rejected
 
 
-def _provenance(bank: dict, plan: dict, texts: dict, rejected: dict) -> list[dict]:
+def _provenance(bank: dict, plan: dict, texts: dict, rejected: dict, user_texts: dict | None = None) -> list[dict]:
     lk = _lookup(bank)
+    user_texts = user_texts or {}
     out = []
     for section in ("experiences", "projects"):
         for e in plan[section]:
             for bid in e["bullet_ids"]:
                 b, item = lk[bid]
                 row = {"bullet_id": bid, "item_id": item["id"], "source": bankmod.plain(b["text"]),
-                       "printed": "rephrased" if bid in texts else "bank"}
-                if bid in texts:
+                       "printed": "edited" if bid in user_texts else "rephrased" if bid in texts else "bank"}
+                if bid in user_texts:   # your own wording from the preview editor
+                    row.update(edited=True, text=user_texts[bid])
+                elif bid in texts:
                     row.update(rephrased=True, text=texts[bid])
                 if bid in rejected:
                     row.update(rejected=True, rejected_text=rejected[bid]["text"], reasons=rejected[bid]["reasons"])
                 out.append(row)
     return out
+
+
+def preview(bank: dict, prep: Prepared) -> dict:
+    """What will go on the page, in order, for the preview editor (nothing compiled)."""
+    lk = _lookup(bank)
+    plan = prep.sel.ordered()
+    by_item = {it["id"]: it for sec in ("experiences", "projects") for it in bank.get(sec, [])}
+    out = {"skills": plan["skills"], "lines_used": round(prep.sel.used(), 1), "budget": round(prep.sel.budget, 1),
+           "company": prep.job.company, "role": prep.job.title, "mode": prep.mode, "warnings": list(prep.warnings)}
+    for section in ("experiences", "projects"):
+        rows = []
+        for e in plan[section]:
+            it = by_item.get(e["id"], {})
+            rows.append({"id": e["id"], "title": it.get("title", e["id"]), "org": it.get("org") or "",
+                         "bullets": [{"id": b, "text": prep.texts.get(b) or bankmod.plain(lk[b][0]["text"]),
+                                      "edited": b in prep.texts, "lines": prep.sel.cands[b].lines}
+                                     for b in e["bullet_ids"]]})
+        out[section] = rows
+    return out
+
+
+def bullet_scores(prep: Prepared) -> list[dict]:
+    """Per-bullet score parts of what's planned (same shape as run.json's bullet_scores)."""
+    plan = prep.sel.ordered()
+    picked = [b for e in plan["experiences"] + plan["projects"] for b in e["bullet_ids"]]
+    return [prep.sel.cands[b].to_json() | {"lines": prep.sel.cands[b].lines, "pinned": prep.sel.cands[b].pinned}
+            for b in picked if b in prep.sel.cands]

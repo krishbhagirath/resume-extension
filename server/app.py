@@ -34,6 +34,7 @@ load_dotenv(ROOT / ".env")
 
 import analyzer  # noqa: E402
 import bank as bankmod  # noqa: E402
+import drafts  # noqa: E402
 import importer  # noqa: E402
 import layout  # noqa: E402
 import linefit  # noqa: E402
@@ -244,6 +245,7 @@ class JobRequest(BaseModel):
     source: str = Field("", max_length=40)   # e.g. "greenhouse", "jsonld", "manual"
     confidence: float | None = None
     variant: Literal["claude", "matcher"] = "claude"   # matcher = skip the Claude re-rank
+    mode: Literal["full", "plan"] = "full"   # plan = choose content only, preview before compiling
 
 
 @app.post("/api/jobs")
@@ -728,8 +730,10 @@ def replace_item(run_id: str, body: ReplaceBody):
 def edit_options(run_id: str):
     """Everything the preview editor needs in one call: per section, the items on the page with their
     printed bullets and spare bullets (unused ones of that item), plus unused items that could come in."""
-    m = _meta(run_id)
-    bank = _bank_or_400()
+    return _editor_options(_meta(run_id), _bank_or_400())
+
+
+def _editor_options(m: dict, bank: dict) -> dict:
     items = _item_options(m, bank)
     spare = _swap_options(m, bank)
     printed: dict[str, list[dict]] = {}
@@ -769,6 +773,14 @@ def edit_run(run_id: str, body: EditBody):
     if not body.items and not body.bullets:
         raise HTTPException(400, "No changes to apply.")
     bank = _bank_or_400()
+    ov, changes = _apply_changes(m, bank, body)
+    job = _rebuild(run_id, m, ov, {"kind": "batch", "changes": changes})
+    return job | {"changes": changes}
+
+
+def _apply_changes(m: dict, bank: dict, body: "EditBody") -> tuple[dict[str, set], list[dict]]:
+    """Check item and bullet changes against what's on the page (a run or a draft) and fold them into its
+    overrides. Raises HTTPException with a plain reason when something can't be done."""
     opts = _item_options(m, bank)
     section_of = {i["id"]: s for s, v in opts.items() for i in v["on_page"]}
     outs = [c.out for c in body.items]
@@ -830,8 +842,99 @@ def edit_run(run_id: str, body: EditBody):
             ov["exclude"] -= {b.in_}
             ov["include"] |= {b.in_}
             changes.append({"kind": "bullet", "action": "replace", "out": b.out, "in": b.in_})
-    job = _rebuild(run_id, m, ov, {"kind": "batch", "changes": changes})
-    return job | {"changes": changes}
+    return ov, changes
+
+
+# ---------------------------------------------------------------- drafts: preview and edit before compiling
+
+def _draft_or_404(draft_id: str) -> dict:
+    d = drafts.load(OUTPUT_DIR, draft_id)
+    if not d:
+        raise HTTPException(404, "That preview no longer exists. Make the resume again.")
+    return d
+
+
+def _draft_payload(d: dict, bank: dict) -> dict:
+    return {"id": d["id"], "rev": d["rev"], "company": d["company"], "role": d["role"], "variant": d["variant"],
+            "mode": d["mode"], "preview": d["preview"], "options": _editor_options(d, bank),
+            "changed": bool(d.get("changes")), "built": d.get("built"), "stats": d.get("stats") or {}}
+
+
+@app.get("/api/drafts/{draft_id}")
+def get_draft(draft_id: str):
+    return _draft_payload(_draft_or_404(draft_id), _bank_or_400())
+
+
+class DraftEdit(EditBody):
+    order: dict[str, list[str]] | None = None             # {"experiences": [ids], "projects": [ids]}
+    bullet_order: dict[str, list[str]] | None = None      # {item id: [bullet ids]}
+    texts: dict[str, str | None] | None = None            # {bullet id: your wording, or null to undo}
+
+
+@app.post("/api/drafts/{draft_id}/edit")
+def edit_draft(draft_id: str, body: DraftEdit):
+    """Change a draft and re-plan it right away (no model call, no compile). Returns the new preview."""
+    d = _draft_or_404(draft_id)
+    bank = _bank_or_400()
+    changes = []
+    if body.items or body.bullets:
+        ov, changes = _apply_changes(d, bank, body)
+        d["overrides"] = {k: sorted(v) for k, v in ov.items()}
+    printed = {p["bullet_id"] for p in d["provenance"]}
+    if body.texts:
+        for bid, text in body.texts.items():
+            text = drafts.clean_text(text)
+            if bid not in printed and bid not in d["texts"]:
+                raise HTTPException(400, f"Bullet {bid} isn't on this resume.")
+            if text and text != next((p["source"] for p in d["provenance"] if p["bullet_id"] == bid), None):
+                d["texts"][bid] = text
+                changes.append({"kind": "text", "action": "edit", "out": bid, "in": bid})
+            else:
+                d["texts"].pop(bid, None)
+    if body.order is not None:
+        for sec in ("experiences", "projects"):
+            if sec in body.order:
+                d["order"][sec] = [str(i)[:120] for i in body.order[sec]][:30]
+        changes.append({"kind": "order", "action": "items"})
+    if body.bullet_order is not None:
+        d["order"].setdefault("bullets", {}).update({str(k)[:120]: [str(b)[:120] for b in v][:20]
+                                                     for k, v in body.bullet_order.items()})
+        changes.append({"kind": "order", "action": "bullets"})
+    if not changes:
+        raise HTTPException(400, "No changes to apply.")
+    for b in d["overrides"].get("exclude", []):   # wording for a bullet you removed is dropped too
+        d["texts"].pop(b, None)
+    prep = drafts.prepare(bank, d)
+    drafts.refresh(bank, d, prep)
+    d["rev"] += 1
+    d["changes"] = (d.get("changes") or []) + changes
+    drafts.save(OUTPUT_DIR, d)
+    return _draft_payload(d, bank)
+
+
+@app.post("/api/drafts/{draft_id}/reset")
+def reset_draft(draft_id: str):
+    """Undo every change: back to the plan you started from (still no model call)."""
+    d = _draft_or_404(draft_id)
+    bank = _bank_or_400()
+    d["overrides"] = {k: list(d["initial"]["overrides"].get(k) or []) for k in drafts.KEYS}
+    d["order"], d["texts"], d["changes"] = {}, {}, []
+    prep = drafts.prepare(bank, d)
+    drafts.refresh(bank, d, prep)
+    d["rev"] += 1
+    drafts.save(OUTPUT_DIR, d)
+    return _draft_payload(d, bank)
+
+
+@app.post("/api/drafts/{draft_id}/build")
+def build_draft(draft_id: str):
+    """Compile the draft as it is now and fit it to one page (one LaTeX build, no model call)."""
+    d = _draft_or_404(draft_id)
+    _bank_or_400()
+    job = store.start({"mode": "build", "draft_id": d["id"], "rev": d["rev"], "jd": d["jd"], "company": d["company"],
+                       "role": d["role"], "url": d.get("url", ""), "variant": d.get("variant") or "claude",
+                       "force_text": True, "source": "draft"})
+    return job.public()
 
 
 @app.get("/api/pdf/{run_id}")

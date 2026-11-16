@@ -108,6 +108,9 @@ class Selection:
     budget: float
     chosen: dict[str, list[str]] = field(default_factory=dict)   # item id -> bullet ids (in add order)
     log: list[str] = field(default_factory=list)
+    # your order from the preview editor: {"experiences": [ids], "projects": [ids], "bullets": {item: [ids]}}.
+    # Anything not listed keeps its usual place after the listed ones.
+    order: dict = field(default_factory=dict)
 
     # ------------------------------------------------------------ settings
     @property
@@ -319,12 +322,18 @@ class Selection:
                 # bullets: pinned first, then by value
                 miss = self.coverage_state()
                 ordered_ids = sorted(ids, key=lambda b: (-int(self.cands[b].pinned), -self.cands[b].score))
+                mine = (self.order.get("bullets") or {}).get(item_id) or []
+                if mine:
+                    ordered_ids = sorted(ordered_ids, key=lambda b: mine.index(b) if b in mine else len(mine))
                 value = sum(self.cands[b].score for b in ids)
                 entries.append((self.items[item_id]["pos"], -value, {"id": item_id, "bullet_ids": ordered_ids}))
             if keep is True or (keep == "experiences" and section == "experiences"):
                 entries.sort(key=lambda e: e[0])
             else:
                 entries.sort(key=lambda e: e[1])
+            mine = self.order.get(section) or []
+            if mine:
+                entries.sort(key=lambda e: mine.index(e[2]["id"]) if e[2]["id"] in mine else len(mine))
             out[section] = [e[2] for e in entries]
         out["skills"] = pick_skills(self.bank, self.job, self.bullets())
         return out
