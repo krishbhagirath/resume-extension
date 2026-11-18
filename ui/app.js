@@ -652,6 +652,7 @@ const Bank = {
           <label>Extra skills<input data-path="${bp}.skills" data-type="list" value="${esc((b.skills || []).join(", "))}" placeholder="auto-detected"></label>
           <span class="fit" data-fit="${bp}">${this.fitHtml(b)}</span>
           <label class="inline"><input type="checkbox" data-path="${bp}.pinned" data-type="bool" ${b.pinned ? "checked" : ""}> Always</label>
+          <label class="inline" title="Intro point: shown first whenever this item is on the resume"><input type="checkbox" data-path="${bp}.lead" data-type="bool" ${b.lead ? "checked" : ""}> Lead</label>
           <label class="inline"><input type="checkbox" data-path="${bp}.hidden" data-type="bool" ${b.hidden ? "checked" : ""}> Never</label>
         </div>
       </div>`;

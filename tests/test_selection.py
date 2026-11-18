@@ -78,3 +78,40 @@ def test_alt_wordings_exclusive(small_bank):
     job, sel, p = _plan(small_bank, "backend")
     ids = set(_ids(p))
     assert not {"acme-api", "acme-api-alt"} <= ids
+
+
+@pytest.mark.parametrize("name", ["backend", "ml"])
+def test_lead_point_prints_first(small_bank, name):
+    """A point marked lead (it sums up the item) goes first under its item whenever it's chosen,
+    even when it scores lowest."""
+    _, _, before = _plan(small_bank, name)
+    entry = next(e for e in before["experiences"] + before["projects"] if len(e["bullet_ids"]) >= 2)
+    last = entry["bullet_ids"][-1]                      # the lowest-ranked point shown
+    for sec in ("experiences", "projects"):
+        for it in small_bank[sec]:
+            for b in it["bullets"]:
+                if b["id"] == last:
+                    b["lead"] = True
+    _, _, after = _plan(small_bank, name)
+    now = next(e for e in after["experiences"] + after["projects"] if e["id"] == entry["id"])
+    assert now["bullet_ids"][0] == last and set(now["bullet_ids"]) == set(entry["bullet_ids"])
+
+
+@pytest.mark.parametrize("name", ["backend", "ml"])
+def test_item_enters_through_its_lead_point(small_bank, name):
+    """An item on the page always shows its intro point, even one that would never be picked on score,
+    and squeezing the page never trims it (the whole item may still go)."""
+    _, _, before = _plan(small_bank, name)
+    sec = "experiences"
+    item_id = before[sec][0]["id"]
+    item = next(i for i in small_bank[sec] if i["id"] == item_id)
+    item["bullets"].append({"id": "intro-x", "text": "Joined the team and attended weekly planning meetings.",
+                            "lead": True})
+    _, sel, after = _plan(small_bank, name)
+    entry = next((e for e in after[sec] if e["id"] == item_id), None)
+    assert entry and entry["bullet_ids"][0] == "intro-x"
+    sel.budget = sel.used() - 2.5
+    while sel.used() > sel.budget and sel.trim_once():
+        pass
+    ids = sel.chosen.get(item_id) or []
+    assert not ids or "intro-x" in ids

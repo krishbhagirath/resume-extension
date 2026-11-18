@@ -35,6 +35,7 @@ class Bullet(_Base):
     alt_of: Optional[str] = None          # another wording of that bullet; never both on a resume
     skills: list[str] = []                # extra skills this shows (besides what the text names)
     pinned: bool = False                  # always include when the item is included
+    lead: bool = False                    # the item's intro point: shown (first) whenever the item is
     hidden: bool = False                  # keep in the bank but never use
     notes: str = ""                       # extra verified context (used to ground rewording)
     tags: list[str] = []
@@ -222,7 +223,8 @@ def to_dict(bank: Bank) -> dict:
 HEADER = """# Resume Tailor experience bank (schema v{v}). Edit here or on the Experience bank page.
 # Bullets: one accomplishment each. alt_of = another wording of a bullet (never both used).
 # overlaps = items describing the same work (only one used). pinned = always include.
-# With latex_bullets: true, bullets may use \\textbf{{}}, \\emph{{}}, \\%, \\$, \\&, $\\times$.
+# lead = the item's intro point; whenever the item is on the page, so is this point, printed first.
+# With latex_bullets: true, bullets may use \\textbf{{}}, \\emph{{}}, \\%, \\$, \\&, $\\times$, $R^2$.
 """
 
 
@@ -233,7 +235,7 @@ def dump_yaml(data: dict) -> str:
     return HEADER.format(v=SCHEMA_VERSION) + "\n" + body
 
 
-_DEFAULTS = {"pinned": False, "hidden": False, "notes": "", "skills": [], "tags": [], "overlaps": [],
+_DEFAULTS = {"pinned": False, "lead": False, "hidden": False, "notes": "", "skills": [], "tags": [], "overlaps": [],
              "alt_of": None, "stack": "", "url": "", "details": "", "icon": "", "bullets_edu": []}
 
 
@@ -286,7 +288,7 @@ def plain(text: str) -> str:
     for _ in range(3):
         t = re.sub(r"\\(?:textbf|textit|emph|underline|texttt|small)\{([^{}]*)\}", r"\1", t)
     t = (t.replace("$\\times$", "×").replace("$\\sim$", "~").replace("$|$", "|")
-         .replace("$\\pm$", "±").replace("$\\nearrow$", "↗"))
+         .replace("$\\pm$", "±").replace("$\\nearrow$", "↗").replace("$R^2$", "R²"))
     t = t.replace("---", "—").replace("--", "–")
     t = re.sub(r"\\([%$&#_{}])", r"\1", t)
     t = re.sub(r"\$([^$]*)\$", r"\1", t)
@@ -324,7 +326,10 @@ def item_skills(item: dict) -> set[str]:
 
 _ALLOWED_CMDS = {"textbf", "textit", "emph", "underline", "texttt"}
 _ALLOWED_MATH = {"$\\times$", "$\\sim$", "$|$", "$\\pm$", "$\\nearrow$", "$\\approx$", "$\\rightarrow$", "$\\to$",
-                 "$\\geq$", "$\\leq$", "$\\cdot$"}
+                 "$\\geq$", "$\\leq$", "$\\cdot$", "$R^2$"}
+# Printed differently from how they're typed: a math superscript is set in a smaller font than the page
+# minimum, so R^2 uses the text "superior two" glyph (full font size, works in pdflatex and Tectonic).
+_MATH_OUT = {"$R^2$": r"R\texttwosuperior{}"}
 _LATEX_ESC = {"\\": r"\textbackslash{}", "&": r"\&", "%": r"\%", "$": r"\$", "#": r"\#", "_": r"\_",
               "{": r"\{", "}": r"\}", "~": r"\textasciitilde{}", "^": r"\textasciicircum{}"}
 
@@ -359,7 +364,7 @@ def safe_latex(text: str) -> str:
         if c == "$":
             for sym in _ALLOWED_MATH:
                 if s.startswith(sym, i):
-                    out.append(sym)
+                    out.append(_MATH_OUT.get(sym, sym))
                     i += len(sym)
                     break
             else:

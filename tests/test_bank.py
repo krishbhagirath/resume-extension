@@ -73,3 +73,12 @@ def test_safe_latex_blocks_injection(evil):
 def test_safe_latex_keeps_formatting():
     s = r"Built \textbf{FastAPI} service, 40\% faster, 3$\times$ throughput, \emph{R\&D}"
     assert bankmod.safe_latex(s) == s
+
+
+def test_r_squared_prints_as_r_squared():
+    s = r"Trained a TCN to test $R^2$ 0.56 on 3 held-out subjects."
+    # not escaped into a literal "$R^2$", and not a math superscript (smaller than the page's minimum font)
+    assert bankmod.safe_latex(s) == r"Trained a TCN to test R\texttwosuperior{} 0.56 on 3 held-out subjects."
+    assert bankmod.plain(s) == "Trained a TCN to test R² 0.56 on 3 held-out subjects."
+    assert "2" not in bankmod.numbers(s)                           # the exponent isn't a claimed number
+    assert bankmod.safe_latex(r"$a^2$") == r"\$a\textasciicircum{}2\$"   # other math stays escaped

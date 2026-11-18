@@ -216,7 +216,7 @@ class Selection:
             else:   # new item: its best min_b bullets as a bundle
                 if self._section_count(section) >= self.limit(section) or self._blocked_item(item_id):
                     continue
-                ranked = sorted(free, key=lambda c: -self.gain(c, miss))
+                ranked = sorted(free, key=lambda c: (not c.lead, -self.gain(c, miss)))
                 bundle, seen = [], set()
                 for c in ranked:
                     if c.group in seen:
@@ -257,7 +257,7 @@ class Selection:
             if len(ids) > self.min_b:
                 for b in ids:
                     c = self.cands[b]
-                    if c.pinned:
+                    if c.pinned or c.lead:
                         continue
                     miss = self.coverage_state(exclude=b)
                     loss = self.gain(c, miss)
@@ -315,15 +315,17 @@ class Selection:
     def ordered(self) -> dict:
         """Selection in render order: dict with experiences/projects/skills (+ explain)."""
         keep = self.s.get("keep_bank_order", True)
+        lead = {b for b, c in self.cands.items() if c.lead}
         out = {}
         for section in ("experiences", "projects"):
             entries = []
             for item_id, ids in self.chosen.items():
                 if not ids or self.items[item_id]["section"] != section:
                     continue
-                # bullets: pinned first, then by value
+                # bullets: a summary ("lead") point first, then pinned, then by value; your drag order wins
                 miss = self.coverage_state()
-                ordered_ids = sorted(ids, key=lambda b: (-int(self.cands[b].pinned), -self.cands[b].score))
+                ordered_ids = sorted(ids, key=lambda b: (b not in lead, -int(self.cands[b].pinned),
+                                                         -self.cands[b].score))
                 mine = (self.order.get("bullets") or {}).get(item_id) or []
                 if mine:
                     ordered_ids = sorted(ordered_ids, key=lambda b: mine.index(b) if b in mine else len(mine))
@@ -373,12 +375,12 @@ def plan(bank: dict, job: JobAnalysis, cands: list[Candidate], items: dict, budg
     # pinned items first (with their pinned bullets + best others up to the minimum)
     for item_id, info in items.items():
         if info["pinned"] and not sel._blocked_item(item_id):
-            mine = sorted([c for c in cands if c.item_id == item_id], key=lambda c: (-int(c.pinned), -c.score))
+            mine = sorted([c for c in cands if c.item_id == item_id], key=lambda c: (-int(c.pinned or c.lead), -c.score))
             ids, groups = [], set()
             for c in mine:
                 if c.group in groups:
                     continue
-                if len(ids) >= sel.min_b and not c.pinned:
+                if len(ids) >= sel.min_b and not (c.pinned or c.lead):
                     break
                 ids.append(c.bullet_id)
                 groups.add(c.group)
@@ -386,7 +388,9 @@ def plan(bank: dict, job: JobAnalysis, cands: list[Candidate], items: dict, budg
             sel.log.append(f"pinned item {item_id}")
     for c in cands:  # pinned bullets in unpinned items pull their item in
         if c.pinned and not sel.chosen.get(c.item_id) and not sel._blocked_item(c.item_id):
-            sel.chosen[c.item_id] = [c.bullet_id]
+            lead = next((x for x in cands if x.item_id == c.item_id and x.lead and x.group != c.group
+                         and not x.is_alt), None)
+            sel.chosen[c.item_id] = [c.bullet_id] + ([lead.bullet_id] if lead else [])
             sel.log.append(f"pinned bullet {c.bullet_id}")
     while sel.add_once():
         pass

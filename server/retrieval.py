@@ -42,6 +42,7 @@ class Candidate:
     coverage: dict[str, float] = field(default_factory=dict)   # requirement -> 0..1
     parts: dict[str, float] = field(default_factory=dict)
     score: float = 0.0
+    lead: bool = False              # sums up the item: it enters the page through this point, printed first
 
     def to_json(self) -> dict:
         return {"id": self.bullet_id, "item": self.item_id, "score": round(self.score, 2),
@@ -93,6 +94,7 @@ def score_bank(bank: dict, job: JobAnalysis, llm_rank: dict[str, float] | None =
             items[item["id"]] = {"section": section, "pos": pos, "kind": kind, "item": item, "anchor": anchor,
                                  "context_skills": ctx, "pinned": bool(item.get("pinned")),
                                  "overlaps": set(item.get("overlaps") or []), "kind_factor": kind_factor}
+            leads = {b["id"] for b in item.get("bullets", []) if b.get("lead")}
             for b in item.get("bullets", []):
                 if b.get("hidden"):
                     continue
@@ -102,7 +104,8 @@ def score_bank(bank: dict, job: JobAnalysis, llm_rank: dict[str, float] | None =
                     bullet_id=b["id"], item_id=item["id"], section=section, text=b["text"], plain=p,
                     group=b.get("alt_of") or b["id"], is_alt=bool(b.get("alt_of")) or b["id"].endswith("-alt"),
                     pinned=bool(b.get("pinned")), skills=skills, context_skills=ctx - skills,
-                    numbers=bankmod.numbers(b["text"]), words=set(lexicon.content_words(p)), lines=est_lines(p))
+                    numbers=bankmod.numbers(b["text"]), words=set(lexicon.content_words(p)), lines=est_lines(p),
+                    lead=(b.get("alt_of") or b["id"]) in leads or b["id"] in leads)
                 # coverage of each requirement
                 for skill, imp in reqs.items():
                     if skill in skills:

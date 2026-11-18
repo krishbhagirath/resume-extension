@@ -55,9 +55,10 @@ Your bank stays on your computer and is never committed (it's in `.gitignore`). 
 - `alt_of: <bullet id>` marks another wording of the same accomplishment; only one is ever used.
 - `overlaps: [<item id>]` marks items describing the same work (e.g. a club role and its project); only one is used.
 - `pinned: true` always includes an item or bullet; `hidden: true` never does.
+- `lead: true` marks the intro point that sums up an item ("Built a ... that ..."): whenever the item is on the page, its intro point is too, printed first and never trimmed to fit.
 - The bank editor shows how many lines each bullet takes in your template and flags a **short last line** (a word or two spilling onto line 2). Filter by "Short last lines" to fix them once. With `strict_lines: true` (Settings) such a bullet is never printed: a clean wording of it (`alt_of`) is used instead, or it's skipped.
 - `notes` are private context. They're never printed, but the fact checker accepts rewordings that use them.
-- With `latex_bullets: true` you can use `\textbf{}`, `\emph{}`, `\%`, `$\times$`. Anything else is escaped, so a bullet can't break or inject into the template.
+- With `latex_bullets: true` you can use `\textbf{}`, `\emph{}`, `\%`, `$\times$`, `$R^2$` (printed as R² at full font size). Anything else is escaped, so a bullet can't break or inject into the template.
 
 ## Claude usage
 

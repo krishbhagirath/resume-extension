@@ -16,7 +16,7 @@
 1. **Analyze** (`analyzer.py`, deterministic). Splits the posting into sections (required, responsibilities, preferred, about, benefits), finds skills with `lexicon.py` (aliases, longest non-overlapping match, filters for ambiguous names like C, R, Go, CAN, Spring), and weights each requirement by section, "must/required" wording, repetition, position, and the job title. It also classifies role type (backend, ML, embedded, hardware…) and scores how complete the text looks. Below 45% confidence the job stops and asks for the real posting.
 2. **Score** (`retrieval.py`). Every bullet is a candidate with evidence of skills (in its own text, or only in its item's heading/stack), keyword overlap, role fit, measured results, recency, and an estimated line cost.
 3. **Re-rank** (optional). With `ENGINE=local` (`semantic.py`): bullets and the job's top 15 requirements + responsibility lines are embedded with bge-small (fastembed/ONNX, offline after one download). `parts["semantic"]` = importance-weighted max cosine to those queries, rescaled within the bank (median bullet 0, best 1). Its planner weight (1.5) matches Claude's rank bonus, since it stands in for it. No Claude calls. Otherwise (`llm.py`): The top 40 candidates (id + text) and the top requirements go to Claude in one call with a JSON schema. Claude returns an ordered list of ids, plus the company and title. Unknown ids are dropped. Its rank adds a bonus; it can't add text. Answers are cached by prompt hash. Failure or no usage → built-in ranking, with a warning.
-4. **Select** (`planner.py`). Budgeted greedy selection with diminishing returns: each requirement's coverage counts less the more it's already covered. There's a redundancy penalty, and a cost in lines against a page budget derived from the template. Constraints: max experiences/projects, min/max bullets per item, `alt_of` and `overlaps` exclusivity, pinned/hidden. Recent internships get a small anchor bonus.
+4. **Select** (`planner.py`). Budgeted greedy selection with diminishing returns: each requirement's coverage counts less the more it's already covered. There's a redundancy penalty, and a cost in lines against a page budget derived from the template. Constraints: max experiences/projects, min/max bullets per item, `alt_of` and `overlaps` exclusivity, pinned/hidden. An item enters the page through its `lead` (intro) point, which trimming never removes; within an item, bullets print lead first, then pinned, then by score, and a drag order from the preview wins. Recent internships get a small anchor bonus.
 5. **Render + fit** (`render.py`, `layout.py`). The plan fills the template, so all text goes through `bank.safe_latex` (whitelisted formatting only). Tectonic compiles it, and pdfplumber measures the real PDF: pages, bottom gap, smallest font, text past the 0.25in edge. The loop then adjusts:
    - **Too long:** swap to shorter alternatives, then drop the lowest-value bullet, then tighten spacing within the template's bounds.
    - **Too short:** add the next best content, then relax spacing.
@@ -77,14 +77,14 @@ States: `queued → analyzing → matching → selecting → rendering → optim
 
 ## Bank schema v2 (`server/bank.py`)
 
-`version`, `profile`, `settings`, `education`, `skills`, `experiences[]`, `projects[]`. Items have `id`, `title`, `kind` (internship/work/research/team/leadership/volunteer/other or project/school/hackathon), `org`, `location`, `dates`, `stack`, `url`, `tags`, `overlaps`, `pinned`, `hidden`, `notes` and `bullets[]`. Bullets have `id`, `text`, `alt_of`, `skills`, `pinned`, `hidden` and `notes`. v1 files are migrated on load. Saving validates first (errors carry a path like `experiences.2.bullets.0.text`), backs up, and writes atomically. Concurrent edits are caught with a version hash (HTTP 409).
+`version`, `profile`, `settings`, `education`, `skills`, `experiences[]`, `projects[]`. Items have `id`, `title`, `kind` (internship/work/research/team/leadership/volunteer/other or project/school/hackathon), `org`, `location`, `dates`, `stack`, `url`, `tags`, `overlaps`, `pinned`, `hidden`, `notes` and `bullets[]`. Bullets have `id`, `text`, `alt_of`, `skills`, `pinned`, `lead` (the item's intro point: the item enters the page through it, it prints first, and trimming never removes it), `hidden` and `notes`. v1 files are migrated on load. Saving validates first (errors carry a path like `experiences.2.bullets.0.text`), backs up, and writes atomically. Concurrent edits are caught with a version hash (HTTP 409).
 
 ## Tests
 
 ```
 pip install -r requirements-dev.txt
 python -m playwright install chromium   # once, for the extension tests
-python -m pytest -q                      # 177 tests, no Claude usage
+python -m pytest -q                      # 182 tests, no Claude usage
 python tests/benchmark.py                # per-role timing / coverage / overlap table
 npm install && npm run check:ext         # type-check the extension (tsc --checkJs)
 ```
