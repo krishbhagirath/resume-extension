@@ -84,7 +84,7 @@ States: `queued → analyzing → matching → selecting → rendering → optim
 ```
 pip install -r requirements-dev.txt
 python -m playwright install chromium   # once, for the extension tests
-python -m pytest -q                      # 182 tests, no Claude usage
+python -m pytest -q                      # 185 tests, no Claude usage
 python tests/benchmark.py                # per-role timing / coverage / overlap table
 npm install && npm run check:ext         # type-check the extension (tsc --checkJs)
 ```

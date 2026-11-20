@@ -26,6 +26,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 CACHE_DIR = Path(os.getenv("OUTPUT_DIR", ROOT / "output")) / "cache" / "llm"
+# A short debugging log: one line per model call (which account, tokens, time). Lines older than
+# LOG_KEEP_DAYS, or beyond the newest LOG_MAX_LINES, are dropped each time a line is written.
+LOG_FILE = Path(os.getenv("OUTPUT_DIR", ROOT / "output")) / "logs" / "claude-calls.log"
+LOG_KEEP_DAYS = 3
+LOG_MAX_LINES = 300
 DEFAULT_API_MODEL = "claude-sonnet-5-5"
 DEFAULT_CC_MODEL = "haiku"
 _NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
@@ -210,6 +215,36 @@ def _check(data, schema: dict) -> bool:
     return all(k in data for k in schema.get("required", []))
 
 
+def _account() -> str:
+    """Who a call is billed to: the Claude account Resume Tailor is signed into, or the API key."""
+    if engine() == "api":
+        return "API key"
+    try:
+        return claude_code_status().get("account") or "unknown account"
+    except Exception:
+        return "unknown account"
+
+
+def log_call(event: str, *, key: str = "", job_id: str | None = None, stats: dict | None = None,
+             error: str = "", now: float | None = None) -> None:
+    """Append one line to the debugging log and drop old lines. Never raises: logging can't break a resume."""
+    try:
+        now = time.time() if now is None else now
+        s = stats or {}
+        line = (f"{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(now))}  {event:<6}  {_account()}  "
+                f"engine={engine()} model={s.get('model') or model_name()}  "
+                f"in={s.get('input_tokens') or 0} out={s.get('output_tokens') or 0}  "
+                f"requests={s.get('requests', 0)} seconds={s.get('seconds', 0)}  "
+                f"job={job_id or '-'} call={key[:8] or '-'}" + (f"  error={error[:160]}" if error else ""))
+        cutoff = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now - LOG_KEEP_DAYS * 86400))
+        old = LOG_FILE.read_text(encoding="utf-8").splitlines() if LOG_FILE.exists() else []
+        keep = [x for x in old if x[:19] >= cutoff][-(LOG_MAX_LINES - 1):]
+        LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        LOG_FILE.write_text("\n".join(keep + [line.replace("\n", " ")]) + "\n", encoding="utf-8")
+    except Exception:
+        pass
+
+
 def complete_json(prompt: str, schema: dict, *, system: str = SYSTEM, job_id: str | None = None,
                   timeout: int = 180, use_cache: bool = True) -> tuple[dict, dict]:
     eng = engine()
@@ -219,16 +254,22 @@ def complete_json(prompt: str, schema: dict, *, system: str = SYSTEM, job_id: st
     cache_file = CACHE_DIR / f"{key}.json"
     if use_cache and cache_file.exists():
         cached = json.loads(cache_file.read_text(encoding="utf-8"))
+        log_call("cached", key=key, job_id=job_id, stats={"model": cached["stats"].get("model")})
         return cached["data"], {**cached["stats"], "cached": True, "requests": 0}
     t0 = time.time()
     last = None
-    for attempt in range(2):
-        data, stats = (_claude_code(prompt, schema, system, job_id, timeout) if eng == "claude-code"
-                       else _api(prompt, schema, system, timeout))
-        if _check(data, schema):
-            stats.update(requests=attempt + 1, seconds=round(time.time() - t0, 1), cached=False, model=model_name())
-            CACHE_DIR.mkdir(parents=True, exist_ok=True)
-            cache_file.write_text(json.dumps({"data": data, "stats": stats}), encoding="utf-8")
-            return data, stats
-        last = data
-    raise LLMError(f"The model's answer didn't match the expected format: {str(last)[:200]}")
+    try:
+        for attempt in range(2):
+            data, stats = (_claude_code(prompt, schema, system, job_id, timeout) if eng == "claude-code"
+                           else _api(prompt, schema, system, timeout))
+            if _check(data, schema):
+                stats.update(requests=attempt + 1, seconds=round(time.time() - t0, 1), cached=False, model=model_name())
+                CACHE_DIR.mkdir(parents=True, exist_ok=True)
+                cache_file.write_text(json.dumps({"data": data, "stats": stats}), encoding="utf-8")
+                log_call("live", key=key, job_id=job_id, stats=stats)
+                return data, stats
+            last = data
+        raise LLMError(f"The model's answer didn't match the expected format: {str(last)[:200]}")
+    except LLMError as e:
+        log_call("failed", key=key, job_id=job_id, stats={"seconds": round(time.time() - t0, 1)}, error=str(e))
+        raise
